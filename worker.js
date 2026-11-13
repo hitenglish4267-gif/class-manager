@@ -8,6 +8,28 @@ import { serveMedia, galleryPage, cleanupMedia } from './media.js';
 import { generate, sendMessages } from './messages.js';
 import { buildDay } from './context.js';
 
+const INDEX_HTML = `<!doctype html>
+<html lang="ko" data-version="__APP_VERSION__">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f4f0">
+  <meta name="robots" content="noindex">
+  <title>수업 관리</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="stylesheet" href="/app.css?v=__APP_VERSION__">
+</head>
+<body>
+  <div id="app"><div class="boot">불러오는 중…</div></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="ver" title="앱 버전">v __APP_VERSION__</div>
+  <script type="module" src="/js/main.js?v=__APP_VERSION__"></script>
+</body>
+</html>
+`;
+
 function versionOf(env) {
   const id = env.CF_VERSION_METADATA && env.CF_VERSION_METADATA.id;
   return id ? String(id).slice(0, 8) : 'dev';
@@ -24,10 +46,10 @@ export default {
       if ((m = url.pathname.match(/^\/m\/([A-Za-z0-9]+)$/))) return await serveMedia(env, ctx, m[1], request);
       if ((m = url.pathname.match(/^\/g\/([A-Za-z0-9]+)$/))) return await galleryPage(env, m[1]);
       if (url.pathname === '/' || url.pathname === '/index.html') {
-        // 화면 파일에 버전 번호를 넣어서, 새로 배포하면 휴대폰에 옛날 화면이 남지 않게
-        const res = await env.ASSETS.fetch(new Request(new URL('/', url), request));
-        const html = (await res.text()).replaceAll('__APP_VERSION__', version);
-        return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+        // 첫 화면은 파일을 따로 읽지 않고 여기서 바로 보내기 (버전 번호를 넣어서, 새로 배포하면 휴대폰에 옛날 화면이 남지 않게)
+        return new Response(INDEX_HTML.replaceAll('__APP_VERSION__', version), {
+          headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+        });
       }
       return env.ASSETS.fetch(request);
     } catch (e) {
