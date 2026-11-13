@@ -25,7 +25,7 @@ export default {
       if ((m = url.pathname.match(/^\/g\/([A-Za-z0-9]+)$/))) return await galleryPage(env, m[1]);
       if (url.pathname === '/' || url.pathname === '/index.html') {
         // 화면 파일에 버전 번호를 넣어서, 새로 배포하면 휴대폰에 옛날 화면이 남지 않게
-        const res = await env.ASSETS.fetch(new Request(new URL('/index.html', url), request));
+        const res = await env.ASSETS.fetch(new Request(new URL('/', url), request));
         const html = (await res.text()).replaceAll('__APP_VERSION__', version);
         return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
       }
