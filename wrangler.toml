@@ -20,7 +20,7 @@ run_worker_first = true
 [[d1_databases]]
 binding = "DB"
 database_name = "class-manager-db"
-database_id = "여기에_D1_ID"
+database_id = "985cbcfe-57cf-4db3-a9ab-c18f0ac7df31"
 
 # 사진·영상 저장소 (Cloudflare R2)
 [[r2_buckets]]
