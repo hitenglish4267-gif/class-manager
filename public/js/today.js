@@ -61,14 +61,14 @@ function makeModel(c) {
   if (c.type !== 'individual' && c.progress) m.logs[c.target] = logOf(c.target, c.progress);
   for (const s of c.students) {
     if (c.type === 'individual' && s.progress) m.logs[s.target] = logOf(s.target, s.progress);
-    m.studs[s.id] = { hw: s.day.hw || '', comment: s.day.comment || '' };
+    m.studs[s.id] = { hw: s.day.hw || '', comment: s.day.comment || '', tests: (s.tests || []).map((t) => ({ kind: t.kind, correct: t.correct ?? '', total: t.total ?? '', result: t.result || '', manual: false })) };
     m.att[s.id] = { att: s.day.att || '', reason: s.day.reason || '' };
   }
   // 이 기기에 보관된(아직 서버에 못 간) 입력이 있으면 그걸로 복구
   const draft = outbox.get(recKey(c.id));
   if (draft) {
     for (const l of draft.body.logs || []) m.logs[l.target] = { ...l };
-    for (const s of draft.body.students || []) if (m.studs[s.id]) m.studs[s.id] = { hw: s.hw, comment: s.comment };
+    for (const s of draft.body.students || []) if (m.studs[s.id]) m.studs[s.id] = { hw: s.hw, comment: s.comment, tests: Array.isArray(s.tests) ? s.tests : m.studs[s.id].tests };
   }
   for (const s of c.students) {
     const a = outbox.get(attKey(s.id));
@@ -173,7 +173,7 @@ function recordBody(c) {
   return {
     date: S.date, class_id: c.id,
     logs: Object.values(m.logs),
-    students: c.students.map((s) => ({ id: s.id, hw: m.studs[s.id].hw, comment: m.studs[s.id].comment })),
+    students: c.students.map((s) => ({ id: s.id, hw: m.studs[s.id].hw, comment: m.studs[s.id].comment, tests: m.studs[s.id].tests || [] })),
   };
 }
 function dirty(c, delay = 2000) {
@@ -307,6 +307,7 @@ function studentRow(c, s) {
   row._paintHw = paintHw;
 
   row.append(h('div', { class: 'stu-rows' }, h('span', { class: 'k' }, '출결'), attBox, h('span', { class: 'k' }, '숙제'), hwBox));
+  row.append(testBlock(c, s));
 
   const comment = h('textarea', { class: 'input mt-s' + (m.studs[s.id].comment ? '' : ' hidden'), rows: 2, placeholder: '선생님 한마디 (필요할 때만)', value: m.studs[s.id].comment,
     oninput: () => { m.studs[s.id].comment = comment.value; dirty(c); } });
@@ -321,6 +322,62 @@ function studentRow(c, s) {
   paintAtt(); paintHw();
   return row;
 }
+// ───────── 시험 (Voca · Weekly · Monthly) ─────────
+function testBlock(c, s) {
+  const m = cards.get(c.id);
+  const st = m.studs[s.id];
+  if (!st.tests) st.tests = [];
+  const kinds = (S.meta.tests && S.meta.tests.kinds) || ['Voca', 'Weekly', 'Monthly'];
+  const pass = Number((S.meta.tests && S.meta.tests.pass) ?? 80);
+  const wrap = h('div', { class: 'tests' });
+  const totalKey = (kind) => `cm_total:${c.id}:${kind}`;
+  function autoResult(t) {
+    if (t.manual) return;
+    const cor = Number(t.correct), tot = Number(t.total);
+    if (t.correct === '' || t.total === '' || !tot) return;
+    t.result = (cor / tot) * 100 >= pass ? 'good' : 'retest';
+  }
+  function paint() {
+    const kindBtns = h('div', { class: 'test-kinds' }, kinds.map((k) => {
+      const on = st.tests.some((t) => t.kind === k);
+      return h('label', { class: 'test-check' + (on ? ' on' : '') }, h('input', { type: 'checkbox', checked: on, onchange: () => {
+        if (on) st.tests = st.tests.filter((t) => t.kind !== k);
+        else { let tot = ''; try { tot = localStorage.getItem(totalKey(k)) || ''; } catch { /* */ } st.tests.push({ kind: k, correct: '', total: tot, result: '', manual: false }); }
+        paint(); dirty(c);
+        if (!on) { const inp = wrap.querySelector(`[data-kind="${CSS.escape(k)}"] input`); if (inp) inp.focus(); }
+      } }), k);
+    }));
+    const rows = st.tests.map((t) => {
+      const pct = h('span', { class: 'tiny muted test-pct' });
+      const resBox = h('div', { class: 'pick test-res' });
+      const paintRes = () => {
+        const tot = Number(t.total);
+        pct.textContent = t.correct !== '' && tot ? `${Math.round((Number(t.correct) / tot) * 100)}%` : '';
+        resBox.replaceChildren(...[['good', '좋음', 'ok'], ['retest', '재시험', 'bad']].map(([v, l, tone]) => h('button', { class: tone, 'aria-pressed': String(t.result === v), onclick: () => {
+          t.result = t.result === v ? '' : v; t.manual = true; paintRes(); dirty(c);
+        } }, l)));
+      };
+      const num = (key, ph) => h('input', { class: 'input test-num', inputmode: 'decimal', placeholder: ph, value: t[key] === '' || t[key] == null ? '' : String(t[key]), oninput: (e) => {
+        t[key] = e.target.value.replace(/[^0-9.]/g, '');
+        if (key === 'total' && t.total) { try { localStorage.setItem(totalKey(t.kind), t.total); } catch { /* */ } }
+        autoResult(t); paintRes(); dirty(c);
+      } });
+      paintRes();
+      return h('div', { class: 'test-row', 'data-kind': t.kind },
+        h('b', { class: 'test-kind' }, t.kind),
+        h('label', { class: 'test-field' }, h('span', { class: 'tiny muted' }, '맞은 수'), num('correct', '0')),
+        h('span', { class: 'test-slash' }, '/'),
+        h('label', { class: 'test-field' }, h('span', { class: 'tiny muted' }, '문항 수'), num('total', '0')),
+        pct, resBox);
+    });
+    wrap.replaceChildren(
+      h('div', { class: 'test-head' }, h('b', null, '시험'), h('span', { class: 'muted small' }, '(맞은 수/문항 수)'), h('span', { class: 'tiny muted' }, '· 본 시험에 체크하고 점수를 적어 주세요')),
+      kindBtns, ...rows);
+  }
+  paint();
+  return wrap;
+}
+
 function galleryUrl(s) { return `${location.origin}/g/${s.code}`; }
 
 function setAtt(c, s, att, reason) {

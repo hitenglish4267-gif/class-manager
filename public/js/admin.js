@@ -29,7 +29,7 @@ export async function renderAdmin(main) {
     for (const el of document.querySelectorAll('[data-sec]')) if (el.dataset.watch && el.dataset.watch.split(',').includes(key)) { el.className = 'savest small ' + lab.cls; el.textContent = lab.cls ? lab.text : ''; }
   });
   S.stopPoll = () => off();
-  const watch = { aca: 'set:academy,set:director_phone', hw: 'set:hw_buttons,set:reasons', tpl: 'set:sms_templates', cushion: 'set:cushions', send: 'set:kakao', schedule: 'set:schedule', att: 'set:att_alerts,set:sms_templates' };
+  const watch = { aca: 'set:academy,set:director_phone', hw: 'set:hw_buttons,set:reasons,set:tests', tpl: 'set:sms_templates', cushion: 'set:cushions', send: 'set:kakao', schedule: 'set:schedule', att: 'set:att_alerts,set:sms_templates' };
   for (const [id, keys] of Object.entries(watch)) { const el = document.querySelector(`[data-sec="${id}"]`); if (el) el.dataset.watch = keys; }
   if (location.hash.includes('admin') && !A.settings.academy) $('#sec-aca input')?.focus();
 }
@@ -307,13 +307,19 @@ function importStudents(draw) {
 function secHw() {
   const btns = h('textarea', { class: 'input', rows: 8, value: (A.settings.hw_buttons || []).join('\n'), oninput: () => setSetting('hw_buttons', btns.value.split('\n').map((x) => x.trim()).filter(Boolean)) });
   const reasons = h('textarea', { class: 'input', rows: 4, value: (A.settings.reasons || []).join('\n'), oninput: () => setSetting('reasons', reasons.value.split('\n').map((x) => x.trim()).filter(Boolean)) });
-  return section('hw', '숙제 빠른 선택 버튼 · 출결 사유',
-    h('div', { class: 'grid2' }, field('숙제 버튼 (한 줄에 하나)', btns, '"오늘 숙제" 칸 아래 버튼으로 보여요'), field('출결 사유 (한 줄에 하나)', reasons, '사유를 고른 학생은 즉시 알림·일간 리포트에서 빠져요')));
+  const T = A.settings.tests = { kinds: ['Voca', 'Weekly', 'Monthly'], pass: 80, ...(A.settings.tests || {}) };
+  const saveTests = () => { setSetting('tests', { ...T }); S.meta.tests = { ...T }; };
+  const kinds = h('textarea', { class: 'input', rows: 3, value: (T.kinds || []).join('\n'), oninput: () => { T.kinds = kinds.value.split('\n').map((x) => x.trim()).filter(Boolean); saveTests(); } });
+  const pass = h('input', { class: 'input', type: 'number', min: 0, max: 100, value: T.pass, style: { maxWidth: '120px' }, oninput: () => { T.pass = Number(pass.value) || 0; saveTests(); } });
+  return section('hw', '숙제 버튼 · 출결 사유 · 시험',
+    h('div', { class: 'grid2' }, field('숙제 버튼 (한 줄에 하나)', btns, '"오늘 숙제" 칸 아래 버튼으로 보여요'), field('출결 사유 (한 줄에 하나)', reasons, '사유를 고른 학생은 즉시 알림·일간 리포트에서 빠져요')),
+    h('div', { class: 'grid2 mt' }, field('시험 종류 (한 줄에 하나)', kinds, '오늘 수업 화면 학생 칸에 버튼으로 보여요'),
+      field('"좋음" 기준 점수 (%)', pass, '맞은 수/문항 수가 이 점수 이상이면 좋음, 아래면 재시험으로 자동 표시돼요 (직접 바꿀 수도 있어요)')));
 }
 
 // ───────── 메시지 문구 ─────────
-const PH_DAILY = ['학원', '학생명', '반', '날짜', '출석', '오늘 할 일', '숙제', '다음 수업', '지난 숙제 내용', '지난 숙제 결과', '선생님 한마디', '사진 링크', '인사', '출석 멘트', '숙제 멘트', '마무리'];
-const PH_PERIOD = ['학원', '학생명', '반', '기간', '대상월', '출석 요약', '숙제 완료율', '진도', '코멘트', '인사', '주간 멘트', '마무리'];
+const PH_DAILY = ['학원', '학생명', '반', '날짜', '출석', '오늘 할 일', '숙제', '다음 수업', '지난 숙제 내용', '지난 숙제 결과', '시험', '선생님 한마디', '사진 링크', '인사', '출석 멘트', '숙제 멘트', '시험 멘트', '마무리'];
+const PH_PERIOD = ['학원', '학생명', '반', '기간', '대상월', '출석 요약', '숙제 완료율', '진도', '시험 요약', '코멘트', '인사', '주간 멘트', '마무리'];
 function tplEditor(kind, label) {
   const ta = h('textarea', { class: 'input', rows: 12, value: A.settings.sms_templates[kind] || '', oninput: save });
   const warn = h('div', { class: 'note warn small hidden mt-s' }, '#{…} 칸은 알림톡용이에요. "발송 방식"의 알림톡 칸에 넣어 주세요.');
