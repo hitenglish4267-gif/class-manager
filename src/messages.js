@@ -5,7 +5,7 @@ import { addDays, dateKo, dateShort, dowOf, hashNum, kstNow } from './util.js';
 import { buildDay } from './context.js';
 import { oneLine } from './progress.js';
 import { renderTemplate, kakaoVariables } from './render.js';
-import { sendBatch } from './solapi.js';
+import { sendBatch, kakaoOnly } from './solapi.js';
 
 export const ATT_LABEL = { present: '출석', late: '지각', absent: '결석' };
 export const HW_LABEL = { done: '완료', partial: '미흡', missing: '미제출' };
@@ -47,6 +47,7 @@ export function dailyVars(settings, env, cls, st, date) {
   const hw = HW_LABEL[day.hw] || '';
   const v = {
     ...base,
+    학원연락처: settings.academy_phone || '',
     반: cls.name || '',
     날짜: dateKo(date),
     출석: att,
@@ -152,6 +153,7 @@ async function periodVars(env, settings, kind, ref) {
       student: { id: s.id, name: s.name, phone: s.phone, msg_style: s.msg_style, class_id: s.class_id },
       vars: {
         ...base,
+        학원연락처: settings.academy_phone || '',
         반: s.class_name || '',
         기간: `${dateShort(from)} ~ ${dateShort(to)}`,
         대상월: label,
@@ -175,6 +177,12 @@ async function periodVars(env, settings, kind, ref) {
     });
   }
   return out;
+}
+
+/** 메시지 화면에서 고친 "선생님 한마디"를 알림톡 값에 반영 */
+export function applyOverride(vars, comment) {
+  if (comment == null) return vars;
+  return { ...vars, 선생님한마디: comment, 학습성취: comment, 코멘트: comment };
 }
 
 /** 미리보기 만들기(또는 최신 기록으로 다시 맞추기) */
@@ -283,12 +291,16 @@ export async function sendMessages(env, ids, opts = {}) {
   if (!claimed.length) return { sent: 0, failed: 0 };
   const students = await all(env, 'SELECT id, phone, msg_style FROM students WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(claimed.map((m) => m.student_id)));
   const sMap = new Map(students.map((s) => [s.id, s]));
+  const only = await kakaoOnly(env);
+  const ovr = await all(env, 'SELECT message_id, comment FROM msg_overrides WHERE message_id IN (SELECT value FROM json_each(?))', JSON.stringify(claimed.map((m) => m.id)));
+  const oMap = new Map(ovr.map((o) => [o.message_id, o.comment]));
   const items = claimed.map((m) => {
     const s = sMap.get(m.student_id) || {};
     let vars = {};
     try { vars = JSON.parse(m.vars || '{}'); } catch { /* 빈 값 */ }
-    // 직접 고친 메시지는 알림톡 틀에 맞출 수 없으니 문자로 보내요
-    if (m.edited) return { key: m.id, to: s.phone, text: m.text, kakao: null, style: 'sms' };
+    vars = applyOverride(vars, oMap.get(m.id));
+    // 문자를 쓰는 학원에서만: 직접 고친 메시지는 알림톡 틀에 맞출 수 없으니 문자로 보내요
+    if (m.edited && !only) return { key: m.id, to: s.phone, text: m.text, kakao: null, style: 'sms' };
     return buildSendItem(settings, m.kind, m.id, s.phone, m.text, vars, s.msg_style);
   });
   let results;

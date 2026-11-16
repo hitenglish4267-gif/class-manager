@@ -3,8 +3,8 @@
 import { all, first, run, getSettings, setSetting, DEFAULT_SETTINGS } from './db.js';
 import { json, bad, HttpError, randomToken, hashPassword, kstNow, addDays, normPhone, dowOf } from './util.js';
 import { buildDay } from './context.js';
-import { generate, sendMessages, refreshIfExists, attendanceAlert, buildSendItem, ATT_LABEL, HW_LABEL, testText } from './messages.js';
-import { solapiStatus, solapiBalance, sendBatch, authMode } from './solapi.js';
+import { generate, sendMessages, refreshIfExists, attendanceAlert, buildSendItem, applyOverride, ATT_LABEL, HW_LABEL, testText } from './messages.js';
+import { solapiStatus, solapiBalance, sendBatch, authMode, kakaoOnly } from './solapi.js';
 import { oauthStatus, getAccessToken } from './solapi-oauth.js';
 import { renderTemplate, checkKakaoFields, kakaoVariables } from './render.js';
 import { RECOMMENDED_KAKAO, DEFAULT_SMS, KIND_LABELS, CUSHION_LABELS } from './defaults.js';
@@ -265,10 +265,17 @@ async function listMessages(env, me, url) {
     FROM messages m LEFT JOIN students s ON s.id = m.student_id LEFT JOIN classes c ON c.id = s.class_id
     WHERE m.kind = ? AND m.ref = ? ORDER BY c.sort, c.name, s.name`, kind, ref);
   const settings = await getSettings(env);
+  const only = settings.kakao.only !== false;
+  const ovr = await all(env, 'SELECT message_id, comment FROM msg_overrides WHERE message_id IN (SELECT value FROM json_each(?))', JSON.stringify(rows.map((r) => r.id)));
+  const oMap = new Map(ovr.map((o) => [o.message_id, o.comment]));
   const list = rows.filter((r) => !vis || vis.has(r.student_id)).map((r) => {
     let vars = {}; try { vars = JSON.parse(r.vars || '{}'); } catch { /* */ }
-    const item = r.edited ? { kakao: null, style: 'sms' } : buildSendItem(settings, kind, r.id, r.phone, r.text, vars, r.msg_style);
+    const override = oMap.has(r.id) ? oMap.get(r.id) : null;
+    const baseComment = kind === 'weekly' || kind === 'monthly' ? (vars.코멘트 || '') : (vars.선생님한마디 || '');
+    vars = applyOverride(vars, override);
+    const item = r.edited && !only ? { kakao: null, style: 'sms' } : buildSendItem(settings, kind, r.id, r.phone, r.text, vars, r.msg_style);
     return {
+      comment: override != null ? override : baseComment, overridden: override != null, noTemplate: only && !item.kakao,
       id: r.id, student_id: r.student_id, student_name: r.student_name, class_name: r.class_name, class_id: r.class_id, course_id: r.course_id,
       text: r.text, edited: r.edited, checked: r.checked, locked: r.locked, note: r.note, status: r.status,
       sent_at: r.sent_at, error: r.error, channel: r.channel, phone: r.phone,
@@ -276,7 +283,7 @@ async function listMessages(env, me, url) {
       kakaoPreview: item.kakao ? renderTemplate((settings.kakao.templates || []).find((t) => t.templateId === item.kakao.templateId)?.text || '', vars, 'kakao') : '',
     };
   });
-  return { kind, ref, generated: !!exists, list };
+  return { kind, ref, generated: !!exists, list, kakaoOnly: only };
 }
 
 async function checkMessages(env, me, body) {
@@ -302,6 +309,18 @@ async function editMessage(env, me, body) {
   const vis = await visibleStudentIds(env, me);
   if (vis && !vis.has(m.student_id)) throw new HttpError(403, '내 반 학생이 아니에요');
   await run(env, 'UPDATE messages SET text = ?, edited = 1, updated_at = ? WHERE id = ?', String(body.text || ''), kstNow().stamp, m.id);
+  return { ok: true, saved_at: kstNow().stamp };
+}
+
+/** 알림톡 전용: 메시지마다 "선생님 한마디"만 고치기 (승인된 문구 안의 그 칸에 들어가요) */
+async function overrideMessage(env, me, body) {
+  const m = await first(env, 'SELECT id, student_id FROM messages WHERE id = ?', Number(body.id));
+  if (!m) throw bad('메시지를 찾을 수 없어요');
+  const vis = await visibleStudentIds(env, me);
+  if (vis && !vis.has(m.student_id)) throw new HttpError(403, '내 반 학생이 아니에요');
+  if (body.reset) await run(env, 'DELETE FROM msg_overrides WHERE message_id = ?', m.id);
+  else await run(env, 'INSERT INTO msg_overrides (message_id, comment, updated_at) VALUES (?, ?, ?) ON CONFLICT(message_id) DO UPDATE SET comment = excluded.comment, updated_at = excluded.updated_at',
+    m.id, String(body.comment || '').slice(0, 500), kstNow().stamp);
   return { ok: true, saved_at: kstNow().stamp };
 }
 
@@ -336,7 +355,7 @@ async function adminData(env) {
   };
 }
 
-const SETTING_KEYS = new Set(['academy', 'base_url', 'director_phone', 'hw_buttons', 'reasons', 'schedule', 'att_alerts', 'sms_templates', 'cushions', 'kakao', 'tests']);
+const SETTING_KEYS = new Set(['academy', 'base_url', 'director_phone', 'academy_phone', 'hw_buttons', 'reasons', 'schedule', 'att_alerts', 'sms_templates', 'cushions', 'kakao', 'tests']);
 async function saveSetting(env, body) {
   if (!SETTING_KEYS.has(body.key)) throw bad('바꿀 수 없는 설정이에요');
   let value = body.value;
@@ -347,7 +366,8 @@ async function saveSetting(env, body) {
   if (body.key === 'kakao') {
     value = { pfId: String(value.pfId || '').trim(), style: value.style === 'cushion' ? 'cushion' : 'basic',
       templates: (value.templates || []).map((t) => ({ uid: t.uid || randomToken(8), kind: t.kind, style: t.style === 'cushion' ? 'cushion' : 'basic',
-        templateId: String(t.templateId || '').trim(), text: String(t.text || '').replace(/\r/g, ''), approved: t.approved !== false })) };
+        templateId: String(t.templateId || '').trim(), text: String(t.text || '').replace(/\r/g, ''), approved: t.approved !== false })),
+      only: value.only !== false };
   }
   await setSetting(env, body.key, value);
   return { ok: true, warnings };
@@ -515,7 +535,7 @@ async function kakaoTest(env, body) {
   if (!t) throw bad('먼저 저장해 주세요');
   if (!settings.kakao.pfId) throw bad('카카오 채널 ID(KA01PF…)를 먼저 넣어 주세요');
   const to = normPhone(body.phone || settings.director_phone || env.SOLAPI_SENDER);
-  const sample = { 학원: settings.academy || '학원', 학생명: '홍길동', 반: '테스트반', 날짜: '11월 13일 (금)', 출석: '출석', 오늘할일: 'Unit 3 · 본문 읽기', 학습내용: '본문 읽기', 숙제: '워크북 12~13쪽', 다음수업: 'Unit 4', 지난숙제내용: '단어 암기', 지난숙제결과: '완료', 선생님한마디: '발표를 아주 잘했어요.', 학습성취: '발표를 아주 잘했어요.', 사진코드: 'test', 인사: '안녕하세요, 어머님!', 마무리: '감사합니다.', 출석멘트: '', 숙제멘트: '숙제를 꼼꼼하게 해 왔어요.', 주간멘트: '꾸준히 잘하고 있어요.', 기간: '11/10(월) ~ 11/13(목)', 대상월: '11월', 출석요약: '출석 4 · 지각 0 · 결석 0', 숙제완료율: '100% (미제출 0회)', 숙제현황: '100% (미제출 0회)', 진도: 'Unit 1 → Unit 4', 코멘트: '잘하고 있어요.', 보완사항: '특별히 보완할 점 없이 잘 해내고 있어요.', 다음학습계획: 'Unit 5', 시험: 'Voca 18/20 (좋음)', 시험멘트: '시험도 좋은 점수로 잘 통과했어요.', 시험요약: 'Voca 평균 92% (4회)' };
+  const sample = { 학원: settings.academy || '학원', 학원연락처: settings.academy_phone || '', 학생명: '홍길동', 반: '테스트반', 날짜: '11월 13일 (금)', 출석: '출석', 오늘할일: 'Unit 3 · 본문 읽기', 학습내용: '본문 읽기', 숙제: '워크북 12~13쪽', 다음수업: 'Unit 4', 지난숙제내용: '단어 암기', 지난숙제결과: '완료', 선생님한마디: '발표를 아주 잘했어요.', 학습성취: '발표를 아주 잘했어요.', 사진코드: 'test', 인사: '안녕하세요, 어머님!', 마무리: '감사합니다.', 출석멘트: '', 숙제멘트: '숙제를 꼼꼼하게 해 왔어요.', 주간멘트: '꾸준히 잘하고 있어요.', 기간: '11/10(월) ~ 11/13(목)', 대상월: '11월', 출석요약: '출석 4 · 지각 0 · 결석 0', 숙제완료율: '100% (미제출 0회)', 숙제현황: '100% (미제출 0회)', 진도: 'Unit 1 → Unit 4', 코멘트: '잘하고 있어요.', 보완사항: '특별히 보완할 점 없이 잘 해내고 있어요.', 다음학습계획: 'Unit 5', 시험: 'Voca 18/20 (좋음)', 시험멘트: '시험도 좋은 점수로 잘 통과했어요.', 시험요약: 'Voca 평균 92% (4회)' };
   const item = { key: 'k', to, text: renderTemplate(t.text, sample, 'kakao'), kakao: { pfId: settings.kakao.pfId, templateId: t.templateId, variables: kakaoVariables(t.text, sample) } };
   const r = (await sendBatch(env, [item])).get('k');
   return { ok: r.ok, channel: r.channel, error: r.error, to };
@@ -534,19 +554,24 @@ async function oauthTest(env) {
     const b = await solapiBalance(env, { mode: 'oauth2' });
     add('잔액 조회', true, `잔액 ${Number(b.balance ?? b.cash ?? 0).toLocaleString()}원`);
   } catch (e) { add('잔액 조회', true, `건너뜀 (${e.message}) — 발송에는 영향 없어요`); }
-  // 3. 테스트 문자
   const to = normPhone(settings.director_phone || env.SOLAPI_SENDER);
-  const sms = (await sendBatch(env, [{ key: 't', to, text: `[${settings.academy || '수업 관리'}] OAuth2 연결 테스트 문자예요.`, kakao: null }], { mode: 'oauth2' })).get('t');
-  add('테스트 문자', !!sms.ok, sms.ok ? `${to.slice(0, 3)}-****-${to.slice(-4)}으로 보냈어요` : sms.error);
-  // 4. 알림톡 테스트 (등록된 템플릿이 있을 때만)
+  const only = settings.kakao.only !== false;
+  // 3. 테스트 문자 (알림톡 전용이면 건너뜀)
+  if (only) add('테스트 문자', true, '건너뜀 (알림톡 전용으로 쓰고 있어요)');
+  else {
+    const sms = (await sendBatch(env, [{ key: 't', to, text: `[${settings.academy || '수업 관리'}] OAuth2 연결 테스트 문자예요.`, kakao: null }], { mode: 'oauth2' })).get('t');
+    add('테스트 문자', !!sms.ok, sms.ok ? `${to.slice(0, 3)}-****-${to.slice(-4)}으로 보냈어요` : sms.error);
+  }
+  // 4. 알림톡 테스트 (알림톡 전용이면 꼭 필요)
   const k = settings.kakao || {};
   const tpl = (k.templates || []).find((t) => t.templateId && t.text && t.kind === 'daily') || (k.templates || []).find((t) => t.templateId && t.text);
   if (k.pfId && tpl) {
-    const sample = { 학원: settings.academy || '학원', 학생명: '홍길동', 반: '테스트반', 날짜: '테스트', 출석: '출석', 오늘할일: '테스트', 숙제: '테스트', 다음수업: '테스트', 지난숙제내용: '테스트', 지난숙제결과: '완료', 선생님한마디: 'OAuth2 연결 테스트예요.', 학습성취: '테스트', 사진코드: 'test', 시험: 'Voca 20/20 (좋음)' };
+    const sample = { 학원: settings.academy || '학원', 학원연락처: settings.academy_phone || '', 학생명: '홍길동', 반: '테스트반', 날짜: '테스트', 출석: '출석', 오늘할일: '테스트', 숙제: '테스트', 다음수업: '테스트', 지난숙제내용: '테스트', 지난숙제결과: '완료', 선생님한마디: 'OAuth2 연결 테스트예요.', 학습성취: '테스트', 사진코드: 'test', 시험: 'Voca 20/20 (좋음)' };
     const item = { key: 'k', to, text: renderTemplate(tpl.text, sample, 'kakao'), kakao: { pfId: k.pfId, templateId: tpl.templateId, variables: kakaoVariables(tpl.text, sample) } };
     const r = (await sendBatch(env, [item], { mode: 'oauth2' })).get('k');
     add('알림톡 테스트', !!r.ok, r.ok ? (r.channel === 'kakao' ? '알림톡으로 보냈어요' : '알림톡이 안 돼서 문자로 보냈어요') : r.error);
-  } else add('알림톡 테스트', true, '건너뜀 (등록된 알림톡 템플릿이 없어요)');
+  } else if (only) add('알림톡 테스트', false, k.pfId ? '알림톡 템플릿이 아직 없어요. 카카오 승인을 받은 일간 리포트 템플릿을 먼저 등록해 주세요' : '카카오 채널 ID(KA01PF…)와 승인받은 알림톡 템플릿을 먼저 등록해 주세요');
+  else add('알림톡 테스트', true, '건너뜀 (등록된 알림톡 템플릿이 없어요)');
   const passed = steps.every((s) => s.ok);
   if (passed) await setSetting(env, 'solapi_auth', { ...(settings.solapi_auth || {}), test_ok_at: kstNow().stamp });
   return { steps, passed };
@@ -626,6 +651,7 @@ export async function handleApi(request, env, ctx, url, version) {
     'POST /api/messages/check': () => checkMessages(env, me, body),
     'POST /api/messages/edit': () => editMessage(env, me, body),
     'POST /api/messages/restore': () => restoreMessage(env, me, body),
+    'POST /api/messages/override': () => overrideMessage(env, me, body),
     'POST /api/messages/send': () => sendNow(env, me, body),
     'GET /api/lessons': () => lessonsOf(env, url),
     'GET /api/media': async () => { await assertStudent(env, me, url.searchParams.get('student_id')); return { list: await mediaList(env, Number(url.searchParams.get('student_id')), url.searchParams.get('date')) }; },

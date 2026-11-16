@@ -9,6 +9,15 @@ import { randomToken, normPhone, validPhone } from './util.js';
 import { first } from './db.js';
 import { getAccessToken, OAuthError } from './solapi-oauth.js';
 
+/** 알림톡 전용인지 (기본: 켜짐). 켜져 있으면 문자는 보내지 않고, 알림톡이 실패해도 문자로 대신 보내지 않아요 */
+export async function kakaoOnly(env) {
+  try {
+    const r = await first(env, "SELECT v FROM settings WHERE k = 'kakao'");
+    const v = r ? JSON.parse(r.v) : null;
+    return !(v && v.only === false);
+  } catch { return true; }
+}
+
 /** 지금 쓰는 인증 방식: 'apikey' | 'oauth2' */
 export async function authMode(env) {
   try {
@@ -92,17 +101,19 @@ export async function sendBatch(env, items, opts = {}) {
     return results;
   }
   const from = normPhone(env.SOLAPI_SENDER);
+  const only = opts.kakaoOnly ?? await kakaoOnly(env);
   const valid = [];
   for (const it of items) {
     const to = normPhone(it.to);
     if (!validPhone(to)) { results.set(it.key, { ok: false, channel: '', error: '학부모 번호가 올바르지 않아요' }); continue; }
+    if (only && !it.kakao) { results.set(it.key, { ok: false, channel: '', error: '알림톡 템플릿이 없어서 보내지 못했어요 (관리 → 발송 방식에서 이 종류의 템플릿을 등록해 주세요)' }); continue; }
     valid.push({ ...it, to });
   }
 
   const toPayload = (it, asSms) => {
     const m = { to: it.to, from, customFields: { k: String(it.key) } };
     if (!asSms && it.kakao) {
-      m.kakaoOptions = { pfId: it.kakao.pfId, templateId: it.kakao.templateId, variables: it.kakao.variables, disableSms: false };
+      m.kakaoOptions = { pfId: it.kakao.pfId, templateId: it.kakao.templateId, variables: it.kakao.variables, disableSms: only };
     } else {
       m.text = it.text;
     }
@@ -125,7 +136,7 @@ export async function sendBatch(env, items, opts = {}) {
           continue;
         }
         for (const it of chunk) {
-          if (!asSms && it.kakao && it.text) failedKakao.push(it);
+          if (!asSms && it.kakao && it.text && !only) failedKakao.push(it);
           else results.set(it.key, { ok: false, channel: asSms || !it.kakao ? 'sms' : 'kakao', error: e.message });
         }
         continue;
@@ -143,7 +154,7 @@ export async function sendBatch(env, items, opts = {}) {
         const err = failedKeys.get(String(it.key));
         const channel = asSms || !it.kakao ? 'sms' : 'kakao';
         if (err) {
-          if (channel === 'kakao' && it.text) failedKakao.push({ ...it, kakaoError: err });
+          if (channel === 'kakao' && it.text && !only) failedKakao.push({ ...it, kakaoError: err });
           else results.set(it.key, { ok: false, channel, error: err });
         } else results.set(it.key, { ok: true, channel: asSms && it.kakao ? 'kakao→sms' : channel, error: '' });
       }
@@ -152,7 +163,7 @@ export async function sendBatch(env, items, opts = {}) {
   }
 
   const retry = await run(valid, false);
-  // 알림톡이 실패하면 같은 내용을 문자로 대신 보내기
-  if (retry.length) await run(retry, true);
+  // 알림톡이 실패하면 같은 내용을 문자로 대신 보내기 (알림톡 전용이면 보내지 않음)
+  if (retry.length && !only) await run(retry, true);
   return results;
 }

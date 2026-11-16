@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, kind 
 CREATE UNIQUE INDEX IF NOT EXISTS messages_uk ON messages(kind, ref, student_id);
 CREATE TABLE IF NOT EXISTS att_alerts (date TEXT, student_id INTEGER, kind TEXT, status TEXT, sent_at TEXT, error TEXT, PRIMARY KEY(date, student_id));
 CREATE TABLE IF NOT EXISTS solapi_tokens (account TEXT PRIMARY KEY, enc_refresh TEXT, refresh_fp TEXT, seed_fp TEXT, enc_access TEXT, access_exp INTEGER DEFAULT 0, scope TEXT DEFAULT '', issued_at TEXT, last_refresh_at TEXT, status TEXT DEFAULT 'ready', error TEXT DEFAULT '', lock_id TEXT, lock_until INTEGER DEFAULT 0, updated_at TEXT);
+CREATE TABLE IF NOT EXISTS msg_overrides (message_id INTEGER PRIMARY KEY, comment TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS jobs (job TEXT, date TEXT, done_at TEXT, PRIMARY KEY(job, date));
 `;
 
@@ -39,6 +40,7 @@ export const DEFAULT_SETTINGS = {
   academy: '',
   base_url: '',
   director_phone: '',
+  academy_phone: '',
   hw_buttons: ['워크북', '단어 암기', '단어 시험 준비', '리딩 녹음', '원서 읽기 + 녹음', '문법 문제', '오답 정리', '숙제 없음'],
   reasons: ['결석', '보강', '결강', '미작성'],
   schedule: {
@@ -52,7 +54,7 @@ export const DEFAULT_SETTINGS = {
   solapi_auth: { mode: 'apikey', test_ok_at: null },
   sms_templates: DEFAULT_SMS,
   cushions: DEFAULT_CUSHIONS,
-  kakao: { pfId: '', style: 'basic', templates: [] },
+  kakao: { pfId: '', style: 'basic', templates: [], only: true },
 };
 
 export async function getSettings(env) {
