@@ -297,3 +297,21 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-
 .tbl td:first-child { white-space: nowrap; }
 .tbl td.small > div, .tbl .chip { white-space: nowrap; }
 .list-item > svg, .chev svg { width: 18px; height: 18px; flex: none; color: var(--muted); }
+
+/* 시험 점수 */
+.tests { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.test-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin-bottom: 7px; font-size: 14px; }
+.test-kinds { display: flex; gap: 6px; flex-wrap: wrap; }
+.test-check { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line-2); background: var(--surface); border-radius: 12px; min-height: 40px; padding: 4px 13px 4px 10px; font-weight: 650; font-size: 14px; cursor: pointer; user-select: none; }
+.test-check input { width: 19px; height: 19px; accent-color: var(--accent); margin: 0; }
+.test-check.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.test-row { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; background: #fbfaf7; border: 1px solid var(--line); border-radius: var(--radius-s); }
+.test-field { display: flex; flex-direction: column; gap: 2px; }
+.test-slash { font-size: 18px; color: var(--muted); padding-bottom: 8px; }
+.test-kind { align-self: center; }
+.test-pct { align-self: center; }
+.test-res { align-self: center; }
+.test-kind { min-width: 58px; font-size: 14px; }
+.test-num { width: 72px !important; min-height: 38px !important; padding: 6px 8px !important; text-align: center; }
+.test-pct { min-width: 34px; }
+.test-res button { min-height: 36px; min-width: 0; padding: 4px 12px; font-size: 13.5px; }
