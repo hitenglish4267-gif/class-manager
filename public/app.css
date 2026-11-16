@@ -315,3 +315,6 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-
 .test-num { width: 72px !important; min-height: 38px !important; padding: 6px 8px !important; text-align: center; }
 .test-pct { min-width: 34px; }
 .test-res button { min-height: 36px; min-width: 0; padding: 4px 12px; font-size: 13.5px; }
+
+/* 알림톡 미리보기 */
+.kakao-preview { margin: 0; white-space: pre-wrap; font-family: inherit; font-size: 14px; line-height: 1.55; background: #fef9e1; border: 1px solid #f1e3a6; border-radius: 12px; padding: 12px 14px; color: #2a2414; }
