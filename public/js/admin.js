@@ -29,7 +29,7 @@ export async function renderAdmin(main) {
     for (const el of document.querySelectorAll('[data-sec]')) if (el.dataset.watch && el.dataset.watch.split(',').includes(key)) { el.className = 'savest small ' + lab.cls; el.textContent = lab.cls ? lab.text : ''; }
   });
   S.stopPoll = () => off();
-  const watch = { aca: 'set:academy,set:director_phone', hw: 'set:hw_buttons,set:reasons,set:tests', tpl: 'set:sms_templates', cushion: 'set:cushions', send: 'set:kakao', schedule: 'set:schedule', att: 'set:att_alerts,set:sms_templates' };
+  const watch = { aca: 'set:academy,set:director_phone,set:academy_phone', hw: 'set:hw_buttons,set:reasons,set:tests', tpl: 'set:sms_templates', cushion: 'set:cushions', send: 'set:kakao', schedule: 'set:schedule', att: 'set:att_alerts,set:sms_templates' };
   for (const [id, keys] of Object.entries(watch)) { const el = document.querySelector(`[data-sec="${id}"]`); if (el) el.dataset.watch = keys; }
   if (location.hash.includes('admin') && !A.settings.academy) $('#sec-aca input')?.focus();
 }
@@ -38,9 +38,11 @@ export async function renderAdmin(main) {
 function secAcademy() {
   const name = h('input', { class: 'input', value: A.settings.academy || '', placeholder: '예: 파머스어학원 진영캠퍼스', oninput: () => { setSetting('academy', name.value.trim()); S.meta.academy = name.value.trim(); refreshTitle(); } });
   const phone = h('input', { class: 'input', value: A.settings.director_phone || '', inputmode: 'tel', placeholder: '010-0000-0000', oninput: () => setSetting('director_phone', phone.value.trim()) });
+  const acaPhone = h('input', { class: 'input', value: A.settings.academy_phone || '', inputmode: 'tel', placeholder: '055-000-0000', oninput: () => setSetting('academy_phone', acaPhone.value.trim()) });
   return section('aca', '학원 정보',
     !A.settings.academy ? h('div', { class: 'note warn', style: { marginBottom: '12px' } }, '먼저 학원 이름부터 정해 주세요. 학부모 메시지의 {학원} 자리에 들어가요.') : null,
-    h('div', { class: 'grid2' }, field('학원 이름', name, '메시지 맨 앞 [학원 이름]에 들어가요'), field('원장님 휴대폰', phone, '"나에게 테스트 문자"를 받을 번호예요')),
+    h('div', { class: 'grid2' }, field('학원 이름', name, '메시지 맨 앞 [학원 이름]에 들어가요'), field('원장님 휴대폰', phone, '테스트 알림톡을 받을 번호예요')),
+    h('div', { class: 'grid2 mt' }, field('학원 연락처 (문의 번호)', acaPhone, '알림톡의 #{학원연락처} 칸에 들어가요')),
     h('div', { class: 'row mt' },
       h('span', { class: 'small muted grow' }, '앱 주소: ', h('code', null, A.settings.base_url || location.origin)),
       h('button', { class: 'btn small', onclick: changeDirectorPw }, '원장 비밀번호 바꾸기')));
@@ -352,7 +354,7 @@ function secCushions() {
 
 // ───────── 발송 방식 (솔라피 · 알림톡) ─────────
 function secSend() {
-  const k = A.settings.kakao = { pfId: '', style: 'basic', templates: [], ...A.settings.kakao };
+  const k = A.settings.kakao = { pfId: '', style: 'basic', templates: [], only: true, ...A.settings.kakao };
   const saveKakao = () => setSetting('kakao', { ...k, templates: k.templates }, 700);
   const status = h('div', { class: 'stack' });
   async function loadStatus() {
@@ -370,7 +372,7 @@ function secSend() {
         h('li', null, 'Type은 ', h('b', null, 'Secret'), ', 이름은 ', h('code', null, 'SOLAPI_API_KEY'), ' / ', h('code', null, 'SOLAPI_API_SECRET'), ' / ', h('code', null, 'SOLAPI_SENDER'), ' (발신번호, 숫자만)'),
         h('li', null, '세 개 모두 넣고 ', h('b', null, 'Deploy'), '를 누른 뒤 아래 "다시 확인"을 눌러 주세요.')) : null,
       h('div', { class: 'row' }, h('button', { class: 'btn small', onclick: loadStatus }, '다시 확인'),
-        h('button', { class: 'btn small primary', onclick: async () => {
+        k.only ? h('span', { class: 'tiny muted' }, '알림톡 전용이라 문자 테스트는 없어요. 아래 템플릿마다 "알림톡 테스트"를 눌러 확인해 주세요.') : h('button', { class: 'btn small primary', onclick: async () => {
           try { const r = await api('/api/admin/test-sms', { phone: A.settings.director_phone }); r.ok ? toast(`${fmtPhone(r.to)}으로 테스트 문자를 보냈어요`) : toast(r.error, true); } catch (e) { toast(e.message, true); }
         } }, '나에게 테스트 문자'), h('span', { class: 'tiny muted' }, A.settings.director_phone ? `받는 번호: ${A.settings.director_phone}` : '받는 번호: 발신번호 (학원 정보에서 원장님 휴대폰을 넣으면 그 번호로)')));
   }
@@ -397,6 +399,9 @@ function secSend() {
     h('div', { class: 'sec-title', style: { marginTop: 0 } }, '솔라피 인증 방식'), oauthCard(loadStatus),
     h('div', { class: 'sec-title' }, '솔라피 (문자 발송)'), status,
     h('div', { class: 'sec-title' }, '카카오 알림톡'),
+    h('label', { class: 'switch', style: { marginBottom: '10px' } }, h('input', { type: 'checkbox', checked: k.only, onchange: (e) => { k.only = e.target.checked; saveKakao(); toast(k.only ? '알림톡 전용으로 바꿨어요 (문자는 보내지 않아요)' : '문자도 함께 보내요'); } }),
+      h('b', null, '알림톡 전용'), h('span', { class: 'small muted' }, ' — 문자(SMS/LMS)는 보내지 않고, 알림톡이 실패해도 문자로 대신 보내지 않아요')),
+    k.only ? h('div', { class: 'note warn small', style: { marginBottom: '10px' } }, '알림톡 전용이에요. 일간 리포트·미제출·주간·월간·출결 알림 중 템플릿을 등록한 종류만 보내져요. 템플릿이 없는 종류는 "템플릿 없음"으로 표시되고 보내지지 않아요.') : null,
     h('div', { class: 'note small' }, '처음엔 문자(SMS/LMS)로 나가요. 카카오 심사를 통과한 템플릿을 아래에 넣으면 그 종류는 알림톡으로 바뀌어요. 비워 둔 종류는 문자로 나가고, 알림톡이 실패하면 같은 내용을 문자로 대신 보내요. (친구톡은 끝나고 광고용 브랜드 메시지로 바뀌어서, 수업 안내는 알림톡을 써요)'),
     h('div', { class: 'grid2 mt' }, field('카카오 채널 ID (pfId)', pf, '솔라피 → 카카오 채널 연동 화면의 KA01PF… 값'), field('메시지 형식', styleSeg, '학생마다 따로 정하려면 관리 → 학생에서')),
     h('div', { class: 'note small mt' }, h('b', null, '사진 버튼 만들기: '), '알림톡 템플릿에 "웹링크" 버튼을 추가하고 주소를 아래처럼 넣으세요. 버튼을 누르면 그 학생의 사진·영상 모아 보기가 열려요.',

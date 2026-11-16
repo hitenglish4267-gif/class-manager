@@ -77,7 +77,10 @@ export async function renderMessages(main) {
       return;
     }
     if (!v.length) { list.replaceChildren(h('div', { class: 'card empty' }, h('b', null, kind === 'missing' ? '미제출 학생이 없어요' : '보낼 메시지가 없어요'))); return; }
-    list.replaceChildren(...v.map(card));
+    const missingTpl = data.kakaoOnly && v.some((m) => m.noTemplate);
+    list.replaceChildren(
+      missingTpl ? h('div', { class: 'note bad', style: { marginBottom: '12px' } }, h('b', null, '알림톡 템플릿이 없는 메시지가 있어요. '), '알림톡 전용이라 문자로 대신 보내지 않아요. 관리 → 발송 방식에서 이 종류의 템플릿을 등록해 주세요.') : null,
+      ...v.map(card));
     requestAnimationFrame(() => { for (const t of list.querySelectorAll('textarea')) grow(t); });
   }
   function grow(t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 4, 560) + 'px'; }
@@ -108,6 +111,31 @@ export async function renderMessages(main) {
     toast(`${checkedList().length}건 선택됨`);
   }
 
+  // 알림톡 전용: 승인된 문구 그대로 나가니, 메시지마다 "선생님 한마디"만 고칠 수 있어요
+  function kakaoCard(m, cb, st) {
+    const pre = h('pre', { class: 'kakao-preview', id: `kp-${m.id}` }, m.kakaoPreview || '');
+    const isPeriod = kind === 'weekly' || kind === 'monthly';
+    const inp = h('textarea', { class: 'input', rows: 2, value: m.comment || '', placeholder: isPeriod ? '선생님 코멘트 (이 메시지에만)' : '선생님 한마디 (이 메시지에만)', oninput: () => {
+      m.comment = inp.value;
+      outbox.put(`ovr:${m.id}`, '/api/messages/override', { id: m.id, comment: inp.value }, 1000);
+    } });
+    const saveSt = h('span', { 'data-save': `ovr:${m.id}` });
+    return h('section', { class: 'card msg' + (m.status === 'sent' ? ' sent' : '') + (m.locked ? ' locked' : '') },
+      h('div', { class: 'msg-head' },
+        h('label', { class: 'check' }, cb, h('b', null, m.student_name)),
+        h('span', { class: 'small muted' }, m.class_name || ''),
+        m.noTemplate ? h('span', { class: 'chip bad' }, '알림톡 템플릿 없음') : h('span', { class: 'chip line' }, m.via),
+        m.locked ? h('span', { class: 'chip warn', title: '"모두 체크"에서 빠져요' }, m.locked) : null,
+        st),
+      m.noTemplate
+        ? h('div', { class: 'note bad small' }, '이 종류의 알림톡 템플릿이 아직 없어서 보낼 수 없어요. 관리 → 발송 방식에서 카카오 승인을 받은 템플릿을 등록해 주세요.')
+        : pre,
+      h('label', { class: 'field mt-s' }, h('span', { class: 'lbl' }, isPeriod ? '선생님 코멘트' : '선생님 한마디', h('span', { class: 'tiny muted', style: { fontWeight: 500 } }, ' — 알림톡 문구 안의 이 칸만 고칠 수 있어요')), inp),
+      m.status === 'failed' && m.error ? h('div', { class: 'note bad small mt-s' }, '실패 이유: ', m.error, ' — 발송 시간에 한 번 더 자동으로 보내요.') : null,
+      h('div', { class: 'msg-foot' }, saveSt,
+        m.overridden ? h('button', { class: 'btn small ghost', onclick: async () => { await outbox.flush(`ovr:${m.id}`); await api('/api/messages/override', { id: m.id, reset: true }); toast('수업 기록의 한마디로 되돌렸어요'); load(); } }, '수업 기록 한마디로 되돌리기') : null));
+  }
+
   function card(m) {
     const cb = h('input', { type: 'checkbox', id: `mc-${m.id}`, checked: !!m.checked, onchange: () => {
       setChecked(m, cb.checked); drawBar(); toast(`${checkedList().length}건 선택됨`);
@@ -120,6 +148,7 @@ export async function renderMessages(main) {
     const st = m.status === 'sent' ? h('span', { class: 'chip ok' }, `✓ 전송됨 ${hmOf(m.sent_at)}${m.channel ? ' · ' + m.channel : ''}`)
       : m.status === 'failed' ? h('span', { class: 'chip bad' }, '✕ 실패')
         : m.status === 'sending' ? h('span', { class: 'chip warn' }, '보내는 중') : null;
+    if (data.kakaoOnly) return kakaoCard(m, cb, st);
     const kakaoBox = m.kakaoPreview ? h('pre', { class: 'note small hidden', style: { whiteSpace: 'pre-wrap', margin: '8px 0 0', fontFamily: 'inherit' } }, m.kakaoPreview) : null;
     const el = h('section', { class: 'card msg' + (m.status === 'sent' ? ' sent' : '') + (m.locked ? ' locked' : '') },
       h('div', { class: 'msg-head' },
@@ -163,9 +192,16 @@ export async function renderMessages(main) {
     load();
   }
 
+  const refreshPreview = debounce(async () => {
+    try {
+      const fresh = await api(`/api/messages?kind=${kind}&ref=${ref}`);
+      for (const f of fresh.list) { const pre = document.getElementById(`kp-${f.id}`); if (pre && f.kakaoPreview) pre.textContent = f.kakaoPreview; }
+    } catch { /* 다음에 */ }
+  }, 400);
   const off = outbox.on((key) => {
     const el = document.querySelector(`[data-save="${CSS.escape(key)}"]`);
     if (el) { const s = saveLabel(key); el.className = 'savest ' + s.cls; el.textContent = s.text; }
+    if (key.startsWith('ovr:') && saveLabel(key).cls === 'ok') refreshPreview();
   });
   S.stopPoll = () => off();
   await load();
