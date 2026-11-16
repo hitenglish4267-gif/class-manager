@@ -3,7 +3,7 @@
 import { all, first, run, getSettings, setSetting, DEFAULT_SETTINGS } from './db.js';
 import { json, bad, HttpError, randomToken, hashPassword, kstNow, addDays, normPhone, dowOf } from './util.js';
 import { buildDay } from './context.js';
-import { generate, sendMessages, refreshIfExists, attendanceAlert, buildSendItem, ATT_LABEL, HW_LABEL } from './messages.js';
+import { generate, sendMessages, refreshIfExists, attendanceAlert, buildSendItem, ATT_LABEL, HW_LABEL, testText } from './messages.js';
 import { solapiStatus, solapiBalance, sendBatch } from './solapi.js';
 import { renderTemplate, checkKakaoFields, kakaoVariables } from './render.js';
 import { RECOMMENDED_KAKAO, DEFAULT_SMS, KIND_LABELS, CUSHION_LABELS } from './defaults.js';
@@ -103,7 +103,7 @@ async function meta(env, me) {
   const teachers = await all(env, 'SELECT id, name FROM teachers WHERE active = 1 ORDER BY sort, name');
   return {
     me, academy: settings.academy, courses, curricula, teachers,
-    hw_buttons: settings.hw_buttons, reasons: settings.reasons, schedule: settings.schedule,
+    hw_buttons: settings.hw_buttons, reasons: settings.reasons, schedule: settings.schedule, tests: settings.tests,
     r2: r2Ready(env), today: kstNow().date,
   };
 }
@@ -194,6 +194,17 @@ async function saveRecord(env, me, body, ctx) {
     stmts.push(env.DB.prepare(`INSERT INTO days (date, student_id, class_id, hw, comment, updated_at) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(date, student_id) DO UPDATE SET hw = excluded.hw, comment = excluded.comment, updated_at = excluded.updated_at`)
       .bind(date, Number(s.id), classId, ['done', 'partial', 'missing', ''].includes(s.hw) ? s.hw : '', String(s.comment || ''), stamp));
+    // 시험 점수: 화면에 있는 그대로 다시 저장 (지운 시험은 빠지게)
+    if (Array.isArray(s.tests)) {
+      stmts.push(env.DB.prepare('DELETE FROM tests WHERE date = ? AND student_id = ?').bind(date, Number(s.id)));
+      for (const t of s.tests.slice(0, 10)) {
+        const kind = String(t.kind || '').trim().slice(0, 30);
+        if (!kind) continue;
+        const num = (v) => (v === '' || v == null || isNaN(Number(v)) ? null : Number(v));
+        stmts.push(env.DB.prepare('INSERT OR REPLACE INTO tests (date, student_id, kind, correct, total, result, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .bind(date, Number(s.id), kind, num(t.correct), num(t.total), ['good', 'retest'].includes(t.result) ? t.result : '', stamp));
+      }
+    }
   }
   if (stmts.length) await env.DB.batch(stmts);
   ctx.waitUntil(refreshIfExists(env, date).catch(() => {}));
@@ -233,7 +244,7 @@ async function homework(env, me, url) {
       id: c.id, name: c.name, type: c.type, course_id: c.course_id, time: c.time,
       prevHomework: c.progress ? c.progress.prevHomework : '',
       students: c.students.map((s) => ({
-        id: s.id, name: s.name, att: s.day.att, reason: s.day.reason, hw: s.day.hw,
+        id: s.id, name: s.name, att: s.day.att, reason: s.day.reason, hw: s.day.hw, tests: s.tests || [],
         prevHomework: s.progress ? s.progress.prevHomework : (c.progress ? c.progress.prevHomework : ''),
         daily: mMap.get(`daily|${s.id}`) || null, missing: mMap.get(`missing|${s.id}`) || null,
         acc: acc.get(s.id) || { w_m: 0, w_p: 0, m_m: 0, m_p: 0, d_m: 0, d_p: 0 },
@@ -324,7 +335,7 @@ async function adminData(env) {
   };
 }
 
-const SETTING_KEYS = new Set(['academy', 'base_url', 'director_phone', 'hw_buttons', 'reasons', 'schedule', 'att_alerts', 'sms_templates', 'cushions', 'kakao']);
+const SETTING_KEYS = new Set(['academy', 'base_url', 'director_phone', 'hw_buttons', 'reasons', 'schedule', 'att_alerts', 'sms_templates', 'cushions', 'kakao', 'tests']);
 async function saveSetting(env, body) {
   if (!SETTING_KEYS.has(body.key)) throw bad('바꿀 수 없는 설정이에요');
   let value = body.value;
@@ -503,7 +514,7 @@ async function kakaoTest(env, body) {
   if (!t) throw bad('먼저 저장해 주세요');
   if (!settings.kakao.pfId) throw bad('카카오 채널 ID(KA01PF…)를 먼저 넣어 주세요');
   const to = normPhone(body.phone || settings.director_phone || env.SOLAPI_SENDER);
-  const sample = { 학원: settings.academy || '학원', 학생명: '홍길동', 반: '테스트반', 날짜: '11월 13일 (금)', 출석: '출석', 오늘할일: 'Unit 3 · 본문 읽기', 학습내용: '본문 읽기', 숙제: '워크북 12~13쪽', 다음수업: 'Unit 4', 지난숙제내용: '단어 암기', 지난숙제결과: '완료', 선생님한마디: '발표를 아주 잘했어요.', 학습성취: '발표를 아주 잘했어요.', 사진코드: 'test', 인사: '안녕하세요, 어머님!', 마무리: '감사합니다.', 출석멘트: '', 숙제멘트: '숙제를 꼼꼼하게 해 왔어요.', 주간멘트: '꾸준히 잘하고 있어요.', 기간: '11/10(월) ~ 11/13(목)', 대상월: '11월', 출석요약: '출석 4 · 지각 0 · 결석 0', 숙제완료율: '100% (미제출 0회)', 숙제현황: '100% (미제출 0회)', 진도: 'Unit 1 → Unit 4', 코멘트: '잘하고 있어요.', 보완사항: '특별히 보완할 점 없이 잘 해내고 있어요.', 다음학습계획: 'Unit 5' };
+  const sample = { 학원: settings.academy || '학원', 학생명: '홍길동', 반: '테스트반', 날짜: '11월 13일 (금)', 출석: '출석', 오늘할일: 'Unit 3 · 본문 읽기', 학습내용: '본문 읽기', 숙제: '워크북 12~13쪽', 다음수업: 'Unit 4', 지난숙제내용: '단어 암기', 지난숙제결과: '완료', 선생님한마디: '발표를 아주 잘했어요.', 학습성취: '발표를 아주 잘했어요.', 사진코드: 'test', 인사: '안녕하세요, 어머님!', 마무리: '감사합니다.', 출석멘트: '', 숙제멘트: '숙제를 꼼꼼하게 해 왔어요.', 주간멘트: '꾸준히 잘하고 있어요.', 기간: '11/10(월) ~ 11/13(목)', 대상월: '11월', 출석요약: '출석 4 · 지각 0 · 결석 0', 숙제완료율: '100% (미제출 0회)', 숙제현황: '100% (미제출 0회)', 진도: 'Unit 1 → Unit 4', 코멘트: '잘하고 있어요.', 보완사항: '특별히 보완할 점 없이 잘 해내고 있어요.', 다음학습계획: 'Unit 5', 시험: 'Voca 18/20 (좋음)', 시험멘트: '시험도 좋은 점수로 잘 통과했어요.', 시험요약: 'Voca 평균 92% (4회)' };
   const item = { key: 'k', to, text: renderTemplate(t.text, sample, 'kakao'), kakao: { pfId: settings.kakao.pfId, templateId: t.templateId, variables: kakaoVariables(t.text, sample) } };
   const r = (await sendBatch(env, [item])).get('k');
   return { ok: r.ok, channel: r.channel, error: r.error, to };
@@ -517,12 +528,15 @@ async function exportCsv(env, me, url) {
     WHERE d.date >= ? AND d.date <= ? ORDER BY d.date, c.name, s.name`, from, to);
   const logs = await all(env, 'SELECT * FROM logs WHERE date >= ? AND date <= ?', from, to);
   const lMap = new Map(logs.map((l) => [`${l.date}|${l.target}`, l]));
+  const tRows = await all(env, 'SELECT * FROM tests WHERE date >= ? AND date <= ? ORDER BY kind', from, to);
+  const tMap = new Map();
+  for (const t of tRows) { const k = `${t.date}|${t.student_id}`; if (!tMap.has(k)) tMap.set(k, []); tMap.get(k).push(t); }
   const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const lines = [['날짜', '반', '학생', '출결', '사유', '지난 숙제 결과', '오늘 할 일', '오늘 숙제', '다음 수업', '선생님 한마디'].map(q).join(',')];
+  const lines = [['날짜', '반', '학생', '출결', '사유', '지난 숙제 결과', '오늘 할 일', '오늘 숙제', '다음 수업', '시험 (맞은 수/문항 수)', '선생님 한마디'].map(q).join(',')];
   for (const d of days) {
     if (me.role === 'teacher' && d.teacher_id !== me.id) continue;
     const l = lMap.get(`${d.date}|${d.class_type === 'individual' ? 's' + d.student_id : 'c' + d.class_id}`) || {};
-    lines.push([d.date, d.class_name, d.student_name, ATT_LABEL[d.att] || '', d.reason, HW_LABEL[d.hw] || '', l.today, l.homework, l.next, d.comment].map(q).join(','));
+    lines.push([d.date, d.class_name, d.student_name, ATT_LABEL[d.att] || '', d.reason, HW_LABEL[d.hw] || '', l.today, l.homework, l.next, testText(tMap.get(`${d.date}|${d.student_id}`)), d.comment].map(q).join(','));
   }
   return new Response('﻿' + lines.join('\r\n'), {
     headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`수업기록_${from}_${to}.csv`)}` },

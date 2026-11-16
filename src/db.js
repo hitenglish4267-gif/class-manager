@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS classes (id INTEGER PRIMARY KEY AUTOINCREMENT, name T
 CREATE TABLE IF NOT EXISTS students (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, class_id INTEGER, phone TEXT, course_id INTEGER, curriculum_id INTEGER, start_seq REAL, code TEXT, msg_style TEXT DEFAULT '', deleted INTEGER DEFAULT 0, created_at TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS students_code ON students(code);
 CREATE TABLE IF NOT EXISTS days (date TEXT, student_id INTEGER, class_id INTEGER, att TEXT DEFAULT '', reason TEXT DEFAULT '', att_at TEXT, hw TEXT DEFAULT '', comment TEXT DEFAULT '', updated_at TEXT, PRIMARY KEY(date, student_id));
+CREATE TABLE IF NOT EXISTS tests (date TEXT, student_id INTEGER, kind TEXT, correct REAL, total REAL, result TEXT DEFAULT '', updated_at TEXT, PRIMARY KEY(date, student_id, kind));
 CREATE TABLE IF NOT EXISTS logs (date TEXT, target TEXT, class_id INTEGER, curriculum_id INTEGER, lesson_id INTEGER, seq REAL, today TEXT, next TEXT, homework TEXT, repeat INTEGER DEFAULT 0, updated_at TEXT, PRIMARY KEY(date, target));
 CREATE INDEX IF NOT EXISTS logs_target ON logs(target, date);
 CREATE TABLE IF NOT EXISTS media (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT, student_id INTEGER, date TEXT, r2key TEXT, kind TEXT, mime TEXT, size INTEGER, name TEXT, status TEXT DEFAULT 'uploading', upload_id TEXT, patch TEXT, created_at TEXT);
@@ -46,6 +47,7 @@ export const DEFAULT_SETTINGS = {
     missing_on: true, missing_auto: false, missing_target: 'missing',
   },
   att_alerts: { late: false, absent: false, arrive: false },
+  tests: { kinds: ['Voca', 'Weekly', 'Monthly'], pass: 80 },
   sms_templates: DEFAULT_SMS,
   cushions: DEFAULT_CUSHIONS,
   kakao: { pfId: '', style: 'basic', templates: [] },

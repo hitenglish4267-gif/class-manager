@@ -9,6 +9,17 @@ import { sendBatch } from './solapi.js';
 
 export const ATT_LABEL = { present: '출석', late: '지각', absent: '결석' };
 export const HW_LABEL = { done: '완료', partial: '미흡', missing: '미제출' };
+export const TEST_LABEL = { good: '좋음', retest: '재시험' };
+
+function fmtNum(n) { return n == null || n === '' ? '' : String(+Number(n).toFixed(1)); }
+/** 시험 한 줄: "Voca 18/20 (좋음), Weekly 45/50 (재시험)" */
+export function testText(tests) {
+  return (tests || []).filter((t) => t.correct != null || t.result).map((t) => {
+    const score = t.correct != null && t.total ? `${fmtNum(t.correct)}/${fmtNum(t.total)}` : t.correct != null ? `${fmtNum(t.correct)}점` : '';
+    const res = TEST_LABEL[t.result] ? ` (${TEST_LABEL[t.result]})` : '';
+    return `${t.kind} ${score}${res}`.replace(/\s+/g, ' ').trim();
+  }).join(', ');
+}
 
 function pick(list, seed) {
   const arr = (list || []).map((s) => String(s).trim()).filter(Boolean);
@@ -52,6 +63,9 @@ export function dailyVars(settings, env, cls, st, date) {
     인사: cushion(settings, 'greet', seed, base),
     마무리: cushion(settings, 'end', seed, base),
     출석멘트: day.att === 'late' ? cushion(settings, 'att_late', seed, base) : day.att === 'absent' ? cushion(settings, 'att_absent', seed, base) : '',
+    시험: testText(st.tests),
+    시험멘트: (st.tests || []).some((t) => t.result === 'retest') ? cushion(settings, 'test_retest', seed, base)
+      : (st.tests || []).some((t) => t.result === 'good') ? cushion(settings, 'test_good', seed, base) : '',
     숙제멘트: day.hw === 'done' ? cushion(settings, 'hw_done', seed, base)
       : day.hw === 'partial' ? cushion(settings, 'hw_partial', seed, base)
         : day.hw === 'missing' ? cushion(settings, 'hw_missing', seed, base) : '',
@@ -83,6 +97,9 @@ async function periodVars(env, settings, kind, ref) {
   const classes = await all(env, 'SELECT id, type FROM classes');
   const classType = new Map(classes.map((c) => [c.id, c.type]));
   const logs = await all(env, 'SELECT * FROM logs WHERE date >= ? AND date <= ? ORDER BY date', from, to);
+  const testRows = await all(env, 'SELECT * FROM tests WHERE date >= ? AND date <= ? ORDER BY date', from, to);
+  const testsBy = new Map();
+  for (const t of testRows) { if (!testsBy.has(t.student_id)) testsBy.set(t.student_id, []); testsBy.get(t.student_id).push(t); }
   const logMap = new Map(logs.map((l) => [`${l.date}|${l.target}`, l]));
   const byStudent = new Map();
   for (const d of days) { if (!byStudent.has(d.student_id)) byStudent.set(d.student_id, []); byStudent.get(d.student_id).push(d); }
@@ -92,7 +109,18 @@ async function periodVars(env, settings, kind, ref) {
   for (const s of students) {
     const rows = byStudent.get(s.id) || [];
     const attended = rows.filter((r) => r.att === 'present' || r.att === 'late');
-    if (!rows.some((r) => r.att || r.hw)) continue;
+    const tlist = testsBy.get(s.id) || [];
+    if (!rows.some((r) => r.att || r.hw) && !tlist.length) continue;
+    const byKind = new Map();
+    for (const t of tlist) { if (!byKind.has(t.kind)) byKind.set(t.kind, []); byKind.get(t.kind).push(t); }
+    const testParts = [];
+    for (const [kind, arr] of byKind) {
+      const scored = arr.filter((t) => t.correct != null && t.total);
+      const avg = scored.length ? Math.round(scored.reduce((a, t) => a + (t.correct / t.total) * 100, 0) / scored.length) : null;
+      testParts.push(`${kind} ${avg != null ? `평균 ${avg}%` : ''} (${arr.length}회)`.replace(/\s+/g, ' '));
+    }
+    const retests = tlist.filter((t) => t.result === 'retest').length;
+    const testSummary = testParts.length ? testParts.join(', ') + (retests ? ` · 재시험 ${retests}회` : '') : '';
     const cnt = { present: 0, late: 0, absent: 0, done: 0, partial: 0, missing: 0 };
     for (const r of rows) { if (r.att in cnt) cnt[r.att]++; if (r.hw in cnt) cnt[r.hw]++; }
     const total = cnt.done + cnt.partial + cnt.missing;
@@ -119,6 +147,7 @@ async function periodVars(env, settings, kind, ref) {
     if (cnt.missing) lack.push(`숙제 미제출 ${cnt.missing}회`);
     if (cnt.partial) lack.push(`숙제 미흡 ${cnt.partial}회`);
     if (cnt.absent) lack.push(`결석 ${cnt.absent}회`);
+    if (retests) lack.push(`재시험 ${retests}회`);
     out.push({
       student: { id: s.id, name: s.name, phone: s.phone, msg_style: s.msg_style, class_id: s.class_id },
       vars: {
@@ -130,6 +159,7 @@ async function periodVars(env, settings, kind, ref) {
         숙제완료율: hwText,
         숙제현황: hwText,
         진도: progress,
+        시험요약: testSummary,
         학습내용: uniq.join(', '),
         코멘트: comments.join(' / '),
         학습성취: comments.join(' / '),

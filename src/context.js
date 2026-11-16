@@ -44,6 +44,9 @@ export async function buildDay(env, date, opts = {}) {
   const mediaMap = new Map(mediaRows.map((r) => [r.student_id, r.n]));
   const msgRows = await all(env, "SELECT id, student_id, status, checked, sent_at, error, locked FROM messages WHERE kind = 'daily' AND ref = ?", date);
   const msgMap = new Map(msgRows.map((r) => [r.student_id, r]));
+  const testRows = await all(env, 'SELECT * FROM tests WHERE date = ? ORDER BY kind', date);
+  const testMap = new Map();
+  for (const t of testRows) { if (!testMap.has(t.student_id)) testMap.set(t.student_id, []); testMap.get(t.student_id).push({ kind: t.kind, correct: t.correct, total: t.total, result: t.result }); }
   const alertRows = await all(env, 'SELECT * FROM att_alerts WHERE date = ?', date);
   const alertMap = new Map(alertRows.map((r) => [r.student_id, r]));
 
@@ -60,6 +63,7 @@ export async function buildDay(env, date, opts = {}) {
         id: s.id, name: s.name, phone: s.phone, code: s.code, msg_style: s.msg_style,
         curriculum_id: s.curriculum_id, start_seq: s.start_seq, course_id: s.course_id,
         day: dayMap.get(s.id) || { att: '', reason: '', hw: '', comment: '' },
+        tests: testMap.get(s.id) || [],
         media: mediaMap.get(s.id) || 0,
         msg: msgMap.get(s.id) || null,
         alert: alertMap.get(s.id) || null,
