@@ -4,7 +4,8 @@ import { all, first, run, getSettings, setSetting, DEFAULT_SETTINGS } from './db
 import { json, bad, HttpError, randomToken, hashPassword, kstNow, addDays, normPhone, dowOf } from './util.js';
 import { buildDay } from './context.js';
 import { generate, sendMessages, refreshIfExists, attendanceAlert, buildSendItem, ATT_LABEL, HW_LABEL, testText } from './messages.js';
-import { solapiStatus, solapiBalance, sendBatch } from './solapi.js';
+import { solapiStatus, solapiBalance, sendBatch, authMode } from './solapi.js';
+import { oauthStatus, getAccessToken } from './solapi-oauth.js';
 import { renderTemplate, checkKakaoFields, kakaoVariables } from './render.js';
 import { RECOMMENDED_KAKAO, DEFAULT_SMS, KIND_LABELS, CUSHION_LABELS } from './defaults.js';
 import { mediaStart, mediaPart, mediaComplete, mediaDelete, mediaList, r2Ready } from './media.js';
@@ -520,6 +521,50 @@ async function kakaoTest(env, body) {
   return { ok: r.ok, channel: r.channel, error: r.error, to };
 }
 
+// ───────── 솔라피 OAuth2: 먼저 테스트, 통과하면 전환 ─────────
+async function oauthTest(env) {
+  const settings = await getSettings(env);
+  const steps = [];
+  const add = (name, ok, detail) => steps.push({ name, ok, detail });
+  // 1. 토큰 발급
+  try { await getAccessToken(env); add('토큰 발급', true, 'Refresh Token으로 Access Token을 받았어요'); }
+  catch (e) { add('토큰 발급', false, e.message); return { steps, passed: false }; }
+  // 2. 잔액 조회 (권한이 없으면 건너뜀)
+  try {
+    const b = await solapiBalance(env, { mode: 'oauth2' });
+    add('잔액 조회', true, `잔액 ${Number(b.balance ?? b.cash ?? 0).toLocaleString()}원`);
+  } catch (e) { add('잔액 조회', true, `건너뜀 (${e.message}) — 발송에는 영향 없어요`); }
+  // 3. 테스트 문자
+  const to = normPhone(settings.director_phone || env.SOLAPI_SENDER);
+  const sms = (await sendBatch(env, [{ key: 't', to, text: `[${settings.academy || '수업 관리'}] OAuth2 연결 테스트 문자예요.`, kakao: null }], { mode: 'oauth2' })).get('t');
+  add('테스트 문자', !!sms.ok, sms.ok ? `${to.slice(0, 3)}-****-${to.slice(-4)}으로 보냈어요` : sms.error);
+  // 4. 알림톡 테스트 (등록된 템플릿이 있을 때만)
+  const k = settings.kakao || {};
+  const tpl = (k.templates || []).find((t) => t.templateId && t.text && t.kind === 'daily') || (k.templates || []).find((t) => t.templateId && t.text);
+  if (k.pfId && tpl) {
+    const sample = { 학원: settings.academy || '학원', 학생명: '홍길동', 반: '테스트반', 날짜: '테스트', 출석: '출석', 오늘할일: '테스트', 숙제: '테스트', 다음수업: '테스트', 지난숙제내용: '테스트', 지난숙제결과: '완료', 선생님한마디: 'OAuth2 연결 테스트예요.', 학습성취: '테스트', 사진코드: 'test', 시험: 'Voca 20/20 (좋음)' };
+    const item = { key: 'k', to, text: renderTemplate(tpl.text, sample, 'kakao'), kakao: { pfId: k.pfId, templateId: tpl.templateId, variables: kakaoVariables(tpl.text, sample) } };
+    const r = (await sendBatch(env, [item], { mode: 'oauth2' })).get('k');
+    add('알림톡 테스트', !!r.ok, r.ok ? (r.channel === 'kakao' ? '알림톡으로 보냈어요' : '알림톡이 안 돼서 문자로 보냈어요') : r.error);
+  } else add('알림톡 테스트', true, '건너뜀 (등록된 알림톡 템플릿이 없어요)');
+  const passed = steps.every((s) => s.ok);
+  if (passed) await setSetting(env, 'solapi_auth', { ...(settings.solapi_auth || {}), test_ok_at: kstNow().stamp });
+  return { steps, passed };
+}
+
+async function setAuthMode(env, body) {
+  const settings = await getSettings(env);
+  const cur = settings.solapi_auth || {};
+  if (body.mode === 'oauth2') {
+    const ok = cur.test_ok_at && Date.now() - Date.parse(cur.test_ok_at.replace(' ', 'T') + '+09:00') < 7 * 864e5;
+    if (!ok) throw bad('먼저 "OAuth2 연결 테스트"를 통과해야 바꿀 수 있어요');
+    await setSetting(env, 'solapi_auth', { ...cur, mode: 'oauth2', switched_at: kstNow().stamp });
+  } else {
+    await setSetting(env, 'solapi_auth', { ...cur, mode: 'apikey' });
+  }
+  return { ok: true, mode: body.mode === 'oauth2' ? 'oauth2' : 'apikey' };
+}
+
 async function exportCsv(env, me, url) {
   const from = url.searchParams.get('from') || addDays(kstNow().date, -30);
   const to = url.searchParams.get('to') || kstNow().date;
@@ -602,9 +647,14 @@ export async function handleApi(request, env, ctx, url, version) {
     'GET /api/admin/solapi': async () => {
       directorOnly(me);
       const st = solapiStatus(env);
+      st.mode = await authMode(env);
+      st.oauth = await oauthStatus(env);
+      if (st.mode === 'oauth2') st.ready = !!(st.oauth.hasSender && st.oauth.hasEncKey && st.oauth.stored && st.oauth.status !== 'reissue');
       if (st.ready) { try { const b = await solapiBalance(env); st.balance = b.balance ?? b.cash ?? null; st.point = b.point ?? null; } catch (e) { st.error = e.message; } }
       return st;
     },
+    'POST /api/admin/oauth-test': () => { directorOnly(me); return oauthTest(env); },
+    'POST /api/admin/auth-mode': () => { directorOnly(me); return setAuthMode(env, body); },
   };
   const key = `${method} ${path}`;
   if (R[key]) return json(await R[key]());

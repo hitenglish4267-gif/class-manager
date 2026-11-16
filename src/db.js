@@ -23,6 +23,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS media_token ON media(token);
 CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, ref TEXT, student_id INTEGER, text TEXT, vars TEXT, edited INTEGER DEFAULT 0, checked INTEGER DEFAULT 0, user_set INTEGER DEFAULT 0, locked TEXT DEFAULT '', note TEXT DEFAULT '', status TEXT DEFAULT 'pending', channel TEXT DEFAULT '', sent_at TEXT, error TEXT DEFAULT '', attempts INTEGER DEFAULT 0, lock_at INTEGER, created_at TEXT, updated_at TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS messages_uk ON messages(kind, ref, student_id);
 CREATE TABLE IF NOT EXISTS att_alerts (date TEXT, student_id INTEGER, kind TEXT, status TEXT, sent_at TEXT, error TEXT, PRIMARY KEY(date, student_id));
+CREATE TABLE IF NOT EXISTS solapi_tokens (account TEXT PRIMARY KEY, enc_refresh TEXT, refresh_fp TEXT, seed_fp TEXT, enc_access TEXT, access_exp INTEGER DEFAULT 0, scope TEXT DEFAULT '', issued_at TEXT, last_refresh_at TEXT, status TEXT DEFAULT 'ready', error TEXT DEFAULT '', lock_id TEXT, lock_until INTEGER DEFAULT 0, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS jobs (job TEXT, date TEXT, done_at TEXT, PRIMARY KEY(job, date));
 `;
 
@@ -48,6 +49,7 @@ export const DEFAULT_SETTINGS = {
   },
   att_alerts: { late: false, absent: false, arrive: false },
   tests: { kinds: ['Voca', 'Weekly', 'Monthly'], pass: 80 },
+  solapi_auth: { mode: 'apikey', test_ok_at: null },
   sms_templates: DEFAULT_SMS,
   cushions: DEFAULT_CUSHIONS,
   kakao: { pfId: '', style: 'basic', templates: [] },

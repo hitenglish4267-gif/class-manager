@@ -1,8 +1,22 @@
 // 솔라피(SOLAPI) 문자·알림톡 보내기
-// API Key / Secret / 발신번호는 코드에 넣지 않고 Cloudflare Secrets 에서 읽어요:
-//   SOLAPI_API_KEY, SOLAPI_API_SECRET, SOLAPI_SENDER
+// 열쇠는 코드에 넣지 않고 Cloudflare Secrets 에서 읽어요.
+//   공통: SOLAPI_SENDER (발신번호)
+//   API Key 방식: SOLAPI_API_KEY, SOLAPI_API_SECRET
+//   OAuth2 방식:  SOLAPI_REFRESH_TOKEN, TOKEN_ENC_KEY  (solapi-oauth.js)
+// 어느 방식을 쓸지는 관리 화면의 "솔라피 인증 방식"(설정 solapi_auth.mode)이 정해요. 기본은 API Key.
 
 import { randomToken, normPhone, validPhone } from './util.js';
+import { first } from './db.js';
+import { getAccessToken, OAuthError } from './solapi-oauth.js';
+
+/** 지금 쓰는 인증 방식: 'apikey' | 'oauth2' */
+export async function authMode(env) {
+  try {
+    const r = await first(env, "SELECT v FROM settings WHERE k = 'solapi_auth'");
+    const v = r ? JSON.parse(r.v) : null;
+    return v && v.mode === 'oauth2' ? 'oauth2' : 'apikey';
+  } catch { return 'apikey'; }
+}
 
 const API = 'https://api.solapi.com';
 
@@ -12,8 +26,10 @@ async function hmacHex(secret, msg) {
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-export function solapiReady(env) {
-  return !!(env.SOLAPI_API_KEY && env.SOLAPI_API_SECRET && env.SOLAPI_SENDER);
+export function solapiReady(env, mode = 'apikey') {
+  if (!env.SOLAPI_SENDER) return false;
+  if (mode === 'oauth2') return !!env.TOKEN_ENC_KEY;
+  return !!(env.SOLAPI_API_KEY && env.SOLAPI_API_SECRET);
 }
 
 export function solapiStatus(env) {
@@ -29,18 +45,27 @@ export function solapiStatus(env) {
   };
 }
 
-async function call(env, method, path, body) {
+async function apiKeyHeader(env) {
   const date = new Date().toISOString();
   const salt = randomToken(32);
   const signature = await hmacHex(env.SOLAPI_API_SECRET, date + salt);
-  const res = await fetch(API + path, {
+  return `HMAC-SHA256 apiKey=${env.SOLAPI_API_KEY}, date=${date}, salt=${salt}, signature=${signature}`;
+}
+
+async function call(env, method, path, body, mode = 'apikey') {
+  const send = async (auth) => fetch(API + path, {
     method,
-    headers: {
-      Authorization: `HMAC-SHA256 apiKey=${env.SOLAPI_API_KEY}, date=${date}, salt=${salt}, signature=${signature}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { Authorization: auth, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
+  let res;
+  if (mode === 'oauth2') {
+    res = await send(`Bearer ${await getAccessToken(env)}`);
+    // 401 = Access Token 만료 → 한 번만 새로 받아서 다시
+    if (res.status === 401) res = await send(`Bearer ${await getAccessToken(env, { force: true })}`);
+  } else {
+    res = await send(await apiKeyHeader(env));
+  }
   let data = null;
   try { data = await res.json(); } catch { data = null; }
   if (!res.ok) {
@@ -50,18 +75,19 @@ async function call(env, method, path, body) {
   return data;
 }
 
-export async function solapiBalance(env) {
-  return call(env, 'GET', '/cash/v1/balance');
+export async function solapiBalance(env, opts = {}) {
+  return call(env, 'GET', '/cash/v1/balance', null, opts.mode || await authMode(env));
 }
 
 /**
  * items: [{ key, to, text, kakao: { pfId, templateId, variables } | null }]
  * 반환: Map(key → { ok, channel, error })
  */
-export async function sendBatch(env, items) {
+export async function sendBatch(env, items, opts = {}) {
   const results = new Map();
   if (!items.length) return results;
-  if (!solapiReady(env)) {
+  const mode = opts.mode || await authMode(env);
+  if (!solapiReady(env, mode)) {
     for (const it of items) results.set(it.key, { ok: false, channel: '', error: '솔라피 연결 전이에요 (관리 → 발송 방식에서 확인)' });
     return results;
   }
@@ -91,8 +117,13 @@ export async function sendBatch(env, items) {
       try {
         data = await call(env, 'POST', '/messages/v4/send-many/detail', {
           messages: chunk.map((it) => toPayload(it, asSms)), allowDuplicates: true,
-        });
+        }, mode);
       } catch (e) {
+        if (e instanceof OAuthError) {
+          // 토큰 문제는 문자로 바꿔 보내도 똑같이 실패하니 바로 실패 처리
+          for (const it of chunk) results.set(it.key, { ok: false, channel: '', error: `OAuth2 토큰 문제: ${e.message}` });
+          continue;
+        }
         for (const it of chunk) {
           if (!asSms && it.kakao && it.text) failedKakao.push(it);
           else results.set(it.key, { ok: false, channel: asSms || !it.kakao ? 'sms' : 'kakao', error: e.message });
