@@ -394,13 +394,71 @@ function secSend() {
   drawTpl();
   const link = `${location.origin}/g/#{사진코드}`;
   return section('send', '발송 방식',
-    h('div', { class: 'sec-title', style: { marginTop: 0 } }, '솔라피 (문자 발송)'), status,
+    h('div', { class: 'sec-title', style: { marginTop: 0 } }, '솔라피 인증 방식'), oauthCard(loadStatus),
+    h('div', { class: 'sec-title' }, '솔라피 (문자 발송)'), status,
     h('div', { class: 'sec-title' }, '카카오 알림톡'),
     h('div', { class: 'note small' }, '처음엔 문자(SMS/LMS)로 나가요. 카카오 심사를 통과한 템플릿을 아래에 넣으면 그 종류는 알림톡으로 바뀌어요. 비워 둔 종류는 문자로 나가고, 알림톡이 실패하면 같은 내용을 문자로 대신 보내요. (친구톡은 끝나고 광고용 브랜드 메시지로 바뀌어서, 수업 안내는 알림톡을 써요)'),
     h('div', { class: 'grid2 mt' }, field('카카오 채널 ID (pfId)', pf, '솔라피 → 카카오 채널 연동 화면의 KA01PF… 값'), field('메시지 형식', styleSeg, '학생마다 따로 정하려면 관리 → 학생에서')),
     h('div', { class: 'note small mt' }, h('b', null, '사진 버튼 만들기: '), '알림톡 템플릿에 "웹링크" 버튼을 추가하고 주소를 아래처럼 넣으세요. 버튼을 누르면 그 학생의 사진·영상 모아 보기가 열려요.',
       h('div', { class: 'row mt-s' }, h('code', { class: 'grow' }, link), h('button', { class: 'btn small', onclick: () => copyText(link) }, '복사'))),
     h('div', { class: 'mt' }, tplBox));
+}
+
+// ───────── 솔라피 OAuth2 (콘솔 발급) ─────────
+function oauthCard(reloadStatus) {
+  const box = h('div', { class: 'stack' });
+  const result = h('div');
+  async function load() {
+    let st;
+    try { const all = await api('/api/admin/solapi'); st = { ...all.oauth, mode: all.mode }; } catch (e) { box.replaceChildren(h('div', { class: 'note bad' }, e.message)); return; }
+    const okMark = (b) => (b ? '✓ 있음' : '✕ 없음');
+    const statusNote = st.status === 'reissue'
+      ? h('div', { class: 'note bad' }, h('b', null, '재발급이 필요해요. '), st.error || '', h('br'), '솔라피 콘솔에서 토큰을 재발급하고, Cloudflare의 SOLAPI_REFRESH_TOKEN 값을 새 값으로 바꿔 주세요.')
+      : st.error ? h('div', { class: 'note warn' }, st.error) : null;
+    const expNote = st.daysLeft != null && st.daysLeft <= 10
+      ? h('div', { class: 'note ' + (st.daysLeft <= 3 ? 'bad' : 'warn') }, `솔라피 권한이 ${Math.max(0, st.daysLeft)}일 뒤 만료돼요 (90일마다 재발급). 미리 재발급해 SOLAPI_REFRESH_TOKEN을 바꿔 주세요.`) : null;
+    const testOk = st.testOkAt && (Date.now() - Date.parse(st.testOkAt.replace(' ', 'T') + '+09:00') < 7 * 864e5);
+    box.replaceChildren(
+      h('div', { class: 'row' }, h('span', { class: 'small' }, '지금 쓰는 방식'),
+        h('span', { class: 'chip ' + (st.mode === 'oauth2' ? 'ok' : 'dark') }, st.mode === 'oauth2' ? 'OAuth2 (토큰)' : 'API Key'),
+        st.mode === 'oauth2' ? h('span', { class: 'tiny muted' }, '저녁 자동 발송·수동 발송·출결 알림 모두 OAuth2로 나가요') : h('span', { class: 'tiny muted' }, 'OAuth2 테스트를 통과하면 바꿀 수 있어요')),
+      h('dl', { class: 'kv' },
+        h('dt', null, 'SOLAPI_REFRESH_TOKEN'), h('dd', null, okMark(st.hasSeed)),
+        h('dt', null, 'TOKEN_ENC_KEY'), h('dd', null, okMark(st.hasEncKey)),
+        h('dt', null, 'SOLAPI_SENDER'), h('dd', null, okMark(st.hasSender)),
+        h('dt', null, '토큰 상태'), h('dd', null, !st.stored ? '아직 없음' : st.status === 'reissue' ? '재발급 필요' : st.accessValid ? '연결됨 (Access Token 유효)' : '대기 (필요할 때 자동 발급)'),
+        st.issuedAt ? h('dt', null, '토큰 넣은 날') : null, st.issuedAt ? h('dd', null, `${st.issuedAt.slice(0, 10)} (재발급까지 ${st.daysLeft}일)`) : null,
+        st.lastRefreshAt ? h('dt', null, '마지막 갱신') : null, st.lastRefreshAt ? h('dd', null, st.lastRefreshAt) : null,
+        st.testOkAt ? h('dt', null, '테스트 통과') : null, st.testOkAt ? h('dd', null, st.testOkAt) : null),
+      statusNote, expNote,
+      !(st.hasSeed && st.hasEncKey) ? h('div', { class: 'note warn small' }, 'Cloudflare → class-manager → 설정 → 변수 및 비밀에서 SOLAPI_REFRESH_TOKEN과 TOKEN_ENC_KEY를 "비밀(Secret)"로 넣고 배포한 뒤 "다시 확인"을 눌러 주세요.') : null,
+      h('div', { class: 'row' },
+        h('button', { class: 'btn small', onclick: load }, '다시 확인'),
+        h('button', { class: 'btn small primary', disabled: !(st.hasSeed && st.hasEncKey && st.hasSender), onclick: runTest }, '① OAuth2 연결 테스트'),
+        st.mode === 'oauth2'
+          ? h('button', { class: 'btn small', onclick: () => switchMode('apikey') }, 'API Key로 되돌리기')
+          : h('button', { class: 'btn small dark', disabled: !testOk, title: testOk ? '' : '테스트를 먼저 통과해 주세요', onclick: () => switchMode('oauth2') }, '② 자동 발송도 OAuth2로 바꾸기')),
+      result);
+  }
+  async function runTest(e) {
+    e.target.disabled = true;
+    result.replaceChildren(h('div', { class: 'muted small' }, '테스트 중… (원장님 휴대폰으로 테스트 문자가 가요)'));
+    try {
+      const r = await api('/api/admin/oauth-test', {});
+      result.replaceChildren(h('div', { class: 'note ' + (r.passed ? 'ok' : 'bad') },
+        h('b', null, r.passed ? '테스트 통과! 이제 "자동 발송도 OAuth2로 바꾸기"를 누를 수 있어요.' : '테스트 실패 — 아래 빨간 줄을 확인해 주세요'),
+        h('ol', { class: 'steps', style: { marginTop: '8px' } }, r.steps.map((s) => h('li', { style: { color: s.ok ? 'inherit' : 'var(--bad)' } }, `${s.ok ? '✓' : '✕'} ${s.name}: ${s.detail}`)))));
+      const keep = result.firstChild; await load(); result.replaceChildren(keep);
+    } catch (err) { result.replaceChildren(h('div', { class: 'note bad' }, err.message)); e.target.disabled = false; }
+  }
+  async function switchMode(mode) {
+    const ok = await confirmBox(mode === 'oauth2' ? 'OAuth2로 바꿀까요?' : 'API Key로 되돌릴까요?',
+      mode === 'oauth2' ? '지금부터 저녁 자동 발송, 수동 발송, 출결 알림이 모두 OAuth2 토큰으로 나가요.\n카카오 채널·템플릿·학생 정보·발송 일정은 그대로예요.' : '다시 API Key / Secret 방식으로 보내요.', '바꾸기');
+    if (!ok) return;
+    try { await api('/api/admin/auth-mode', { mode }); toast('바꿨어요'); load(); reloadStatus && reloadStatus(); } catch (e) { toast(e.message, true); }
+  }
+  load();
+  return box;
 }
 
 function tplSlot(t, label, kind, style, saveKakao, remove) {
