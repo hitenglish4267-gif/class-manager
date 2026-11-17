@@ -48,6 +48,7 @@ export const DEFAULT_SETTINGS = {
     weekly_on: true, weekly_day: 5, weekly_auto: false, weekly_exclude_today: true,
     monthly_on: true, monthly_auto: false,
     missing_on: true, missing_auto: false, missing_target: 'missing',
+    hw5_on: true, hw5_auto: false,
   },
   att_alerts: { late: false, absent: false, arrive: false },
   tests: { kinds: ['Voca', 'Weekly', 'Monthly'], pass: 80 },

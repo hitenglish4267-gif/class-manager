@@ -36,6 +36,34 @@ export function baseUrl(settings, env) {
   return String(settings.base_url || env.APP_URL || '').replace(/\/+$/, '');
 }
 
+/** "16:00", "4:30~6:00", "16시 30분" → "16:00" 형식의 시작 시각 */
+export function startHm(time) {
+  const m = String(time || '').match(/(\d{1,2})\s*[:시]\s*(\d{2})?/);
+  if (!m) return '';
+  const hh = Number(m[1]), mm = Number(m[2] || 0);
+  if (hh > 23 || mm > 59) return '';
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+const toMin = (hm) => { const [a, b] = String(hm).split(':').map(Number); return a * 60 + b; };
+
+/** 지각 알림 값: 수업 시작 · 등원(지각 체크) 시각 · 지각 분 */
+export function lateVars(cls, day) {
+  let start = startHm(cls && cls.time);
+  const arrive = day && day.att === 'late' && day.att_at ? String(day.att_at).slice(11, 16) : '';
+  let mins = '';
+  if (start && arrive) {
+    let d = toMin(arrive) - toMin(start);
+    // 오후 수업을 12시간제로 적은 경우 (예: "4:00" 수업에 16:10 등원) → 16:00으로 보고 계산
+    if (d > 12 * 60 - 1 && toMin(start) < 12 * 60) {
+      d -= 12 * 60;
+      const m = toMin(start) + 12 * 60;
+      start = `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    }
+    if (d > 0) mins = String(d);
+  }
+  return { 수업시작시각: start, 등원시각: arrive, 지각분: mins };
+}
+
 /** 일간·미제출·출결 알림에 쓰는 값들 */
 export function dailyVars(settings, env, cls, st, date) {
   const prog = (cls.type === 'individual' ? st.progress : cls.progress) || {};
@@ -70,6 +98,7 @@ export function dailyVars(settings, env, cls, st, date) {
     숙제멘트: day.hw === 'done' ? cushion(settings, 'hw_done', seed, base)
       : day.hw === 'partial' ? cushion(settings, 'hw_partial', seed, base)
         : day.hw === 'missing' ? cushion(settings, 'hw_missing', seed, base) : '',
+    ...lateVars(cls, day),
   };
   return v;
 }
@@ -185,6 +214,46 @@ export function applyOverride(vars, comment) {
   return { ...vars, 선생님한마디: comment, 학습성취: comment, 코멘트: comment };
 }
 
+// ───────── 숙제 누적 5회 알림 ─────────
+export const HW5_COUNT = 5;
+const HW5_KINDS = ['missing', 'partial'];
+
+/**
+ * 오늘(ref) 숙제가 미제출·미흡인 학생 중, 지난 "숙제 5회 알림" 발송 이후
+ * 미제출·미흡 기록이 5회·10회·15회…가 된 학생 목록과 알림 값
+ */
+async function hw5Items(env, settings, ref) {
+  const ctx = await buildDay(env, ref, {});
+  const out = [];
+  for (const cls of ctx.classes) {
+    for (const st of cls.students) {
+      const day = st.day || {};
+      if (!HW5_KINDS.includes(day.hw) || day.reason) continue;
+      const last = await first(env, "SELECT MAX(ref) AS r FROM messages WHERE kind = 'hw5' AND student_id = ? AND status = 'sent' AND ref < ?", st.id, ref);
+      const since = (last && last.r) || '0000-00-00';
+      const rows = await all(env, `SELECT d.date, d.hw, d.class_id, c.type AS class_type FROM days d LEFT JOIN classes c ON c.id = d.class_id
+        WHERE d.student_id = ? AND d.date > ? AND d.date <= ? AND d.hw IN ('missing','partial') AND (d.reason IS NULL OR d.reason = '') ORDER BY d.date`, st.id, since, ref);
+      if (!rows.length || rows.length % HW5_COUNT !== 0) continue;
+      const recent = rows.slice(-HW5_COUNT);
+      const lines = [];
+      for (const r of recent) {
+        const target = r.class_type === 'individual' ? `s${st.id}` : `c${r.class_id}`;
+        const log = await first(env, 'SELECT homework FROM logs WHERE target = ? AND date < ? ORDER BY date DESC LIMIT 1', target, r.date);
+        const hwName = oneLine((log && log.homework) || '') || '숙제';
+        lines.push(`- ${dateShort(r.date)} ${hwName}: ${HW_LABEL[r.hw]}`);
+      }
+      const vars = {
+        ...dailyVars(settings, env, cls, st, ref),
+        집계기간: `${dateShort(recent[0].date)} ~ ${dateShort(recent[recent.length - 1].date)}`,
+        숙제내역: lines.join('\n'),
+        누적횟수: String(HW5_COUNT),
+      };
+      out.push({ student: { ...st, class_id: cls.id }, vars, locked: '', checked: 1 });
+    }
+  }
+  return out;
+}
+
 /** 미리보기 만들기(또는 최신 기록으로 다시 맞추기) */
 export async function generate(env, kind, ref, opts = {}) {
   const settings = opts.settings || await getSettings(env);
@@ -205,6 +274,8 @@ export async function generate(env, kind, ref, opts = {}) {
         items.push({ student: { ...st, class_id: cls.id }, vars, locked, checked: locked ? 0 : 1 });
       }
     }
+  } else if (kind === 'hw5') {
+    items.push(...await hw5Items(env, settings, ref));
   } else {
     const list = await periodVars(env, settings, kind, ref);
     // 주간·월간은 "직접 골라서 보내기"가 기본 → 처음엔 모두 체크 해제 (자동 발송을 켠 경우만 체크)
@@ -250,7 +321,7 @@ export async function generate(env, kind, ref, opts = {}) {
 
 /** 수업 기록이 바뀌면, 이미 만들어 둔 그날 미리보기만 조용히 다시 맞추기 */
 export async function refreshIfExists(env, date) {
-  for (const kind of ['daily', 'missing']) {
+  for (const kind of ['daily', 'missing', 'hw5']) {
     const ex = await first(env, "SELECT id FROM messages WHERE kind = ? AND ref = ? LIMIT 1", kind, date);
     if (ex) await generate(env, kind, date);
   }
@@ -339,8 +410,10 @@ export async function attendanceAlert(env, studentId, date, att) {
   for (const c of ctx.classes) for (const s of c.students) if (s.id === studentId) { cls = c; st = s; }
   if (!st) return;
   const vars = dailyVars(settings, env, cls, st, date);
-  const text = renderTemplate(settings.sms_templates.att, vars, 'sms');
-  const item = buildSendItem(settings, 'att', `a${studentId}`, st.phone, text, vars, st.msg_style);
+  // 지각은 "지각 즉시 알림" 템플릿이 있으면 그걸로 (수업 시작·등원 시각·지각 분 안내), 없으면 출결 알림으로
+  const kind = att === 'late' && chooseKakao(settings, 'late', 'basic') ? 'late' : 'att';
+  const text = renderTemplate(settings.sms_templates[kind] || settings.sms_templates.att, vars, 'sms');
+  const item = buildSendItem(settings, kind, `a${studentId}`, st.phone, text, vars, kind === 'late' ? 'basic' : st.msg_style);
   const res = (await sendBatch(env, [item])).get(item.key) || { ok: false, error: '실패' };
   await env.DB.prepare('UPDATE att_alerts SET status = ?, sent_at = ?, error = ? WHERE date = ? AND student_id = ?')
     .bind(res.ok ? 'sent' : 'failed', kstNow().stamp, res.error || '', date, studentId).run();

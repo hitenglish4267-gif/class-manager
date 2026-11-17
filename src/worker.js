@@ -74,6 +74,7 @@ async function makePreviews(env, settings, now) {
   await materializeLogs(env, now.date);
   await generate(env, 'daily', now.date, { settings });
   if (sch.missing_on) await generate(env, 'missing', now.date, { settings });
+  if (sch.hw5_on) await generate(env, 'hw5', now.date, { settings });
   if (sch.weekly_on && now.dow === Number(sch.weekly_day)) await generate(env, 'weekly', now.date, { settings });
   if (sch.monthly_on && isLastDayOfMonth(now.date)) await generate(env, 'monthly', now.date.slice(0, 7), { settings });
 }
@@ -105,6 +106,10 @@ export async function runSchedule(env, nowMs = Date.now()) {
     if (sch.missing_on && sch.missing_auto) {
       await generate(env, 'missing', now.date, { settings });
       await sendMessages(env, await idsToSend(env, 'missing', now.date), { auto: true });
+    }
+    if (sch.hw5_on && sch.hw5_auto) {
+      await generate(env, 'hw5', now.date, { settings });
+      await sendMessages(env, await idsToSend(env, 'hw5', now.date), { auto: true });
     }
     if (sch.weekly_on && sch.weekly_auto && now.dow === Number(sch.weekly_day)) {
       await generate(env, 'weekly', now.date, { settings });

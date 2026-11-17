@@ -7,7 +7,7 @@ import { generate, sendMessages, refreshIfExists, attendanceAlert, buildSendItem
 import { solapiStatus, solapiBalance, sendBatch, authMode, kakaoOnly } from './solapi.js';
 import { oauthStatus, getAccessToken } from './solapi-oauth.js';
 import { renderTemplate, checkKakaoFields, kakaoVariables, kakaoFieldText } from './render.js';
-import { RECOMMENDED_KAKAO, DEFAULT_SMS, KIND_LABELS, CUSHION_LABELS } from './defaults.js';
+import { RECOMMENDED_KAKAO, DEFAULT_SMS, KIND_LABELS, CUSHION_LABELS, BASIC_ONLY_KINDS } from './defaults.js';
 import { mediaStart, mediaPart, mediaComplete, mediaDelete, mediaList, r2Ready } from './media.js';
 
 const SESSION_DAYS = 60;
@@ -351,7 +351,7 @@ async function adminData(env) {
   return {
     settings: safe, teachers, classes, students,
     solapi: solapiStatus(env), r2: r2Ready(env),
-    defaults: { sms: DEFAULT_SMS, kakao: RECOMMENDED_KAKAO, kinds: KIND_LABELS, cushionLabels: CUSHION_LABELS, cushions: DEFAULT_SETTINGS.cushions },
+    defaults: { sms: DEFAULT_SMS, kakao: RECOMMENDED_KAKAO, kinds: KIND_LABELS, basicOnly: BASIC_ONLY_KINDS, cushionLabels: CUSHION_LABELS, cushions: DEFAULT_SETTINGS.cushions },
   };
 }
 
@@ -535,7 +535,7 @@ async function kakaoTest(env, body) {
   if (!t) throw bad('먼저 저장해 주세요');
   if (!settings.kakao.pfId) throw bad('카카오 채널 ID(KA01PF…)를 먼저 넣어 주세요');
   const to = normPhone(body.phone || settings.director_phone || env.SOLAPI_SENDER);
-  const sample = { 학원: settings.academy || '학원', 학원연락처: settings.academy_phone || '', 학생명: '홍길동', 반: '테스트반', 날짜: '11월 13일 (금)', 출석: '출석', 오늘할일: 'Unit 3 · 본문 읽기', 학습내용: '본문 읽기', 숙제: '워크북 12~13쪽', 다음수업: 'Unit 4', 지난숙제내용: '단어 암기', 지난숙제결과: '완료', 선생님한마디: '발표를 아주 잘했어요.', 학습성취: '발표를 아주 잘했어요.', 사진코드: 'test', 인사: '안녕하세요, 어머님!', 마무리: '감사합니다.', 출석멘트: '', 숙제멘트: '숙제를 꼼꼼하게 해 왔어요.', 주간멘트: '꾸준히 잘하고 있어요.', 기간: '11/10(월) ~ 11/13(목)', 대상월: '11월', 출석요약: '출석 4 · 지각 0 · 결석 0', 숙제완료율: '100% (미제출 0회)', 숙제현황: '100% (미제출 0회)', 진도: 'Unit 1 → Unit 4', 코멘트: '잘하고 있어요.', 보완사항: '특별히 보완할 점 없이 잘 해내고 있어요.', 다음학습계획: 'Unit 5', 시험: 'Voca 18/20 (좋음)', 시험멘트: '시험도 좋은 점수로 잘 통과했어요.', 시험요약: 'Voca 평균 92% (4회)' };
+  const sample = { 학원: settings.academy || '학원', 학원연락처: settings.academy_phone || '', 학생명: '홍길동', 반: '테스트반', 날짜: '11월 13일 (금)', 출석: '출석', 오늘할일: 'Unit 3 · 본문 읽기', 학습내용: '본문 읽기', 숙제: '워크북 12~13쪽', 다음수업: 'Unit 4', 지난숙제내용: '단어 암기', 지난숙제결과: '완료', 선생님한마디: '발표를 아주 잘했어요.', 학습성취: '발표를 아주 잘했어요.', 사진코드: 'test', 인사: '안녕하세요, 어머님!', 마무리: '감사합니다.', 출석멘트: '', 숙제멘트: '숙제를 꼼꼼하게 해 왔어요.', 주간멘트: '꾸준히 잘하고 있어요.', 기간: '11/10(월) ~ 11/13(목)', 대상월: '11월', 출석요약: '출석 4 · 지각 0 · 결석 0', 숙제완료율: '100% (미제출 0회)', 숙제현황: '100% (미제출 0회)', 진도: 'Unit 1 → Unit 4', 코멘트: '잘하고 있어요.', 보완사항: '특별히 보완할 점 없이 잘 해내고 있어요.', 다음학습계획: 'Unit 5', 시험: 'Voca 18/20 (좋음)', 시험멘트: '시험도 좋은 점수로 잘 통과했어요.', 시험요약: 'Voca 평균 92% (4회)', 수업시작시각: '16:00', 등원시각: '16:12', 지각분: '12', 집계기간: '11/3(월) ~ 11/13(목)', 숙제내역: '- 11/3(월) 워크북 12~13쪽: 미제출\n- 11/5(수) 단어 암기: 미흡\n- 11/7(금) 워크북 14쪽: 미제출\n- 11/11(화) 리딩 녹음: 미흡\n- 11/13(목) 워크북 15쪽: 미제출', 누적횟수: '5' };
   const item = { key: 'k', to, text: renderTemplate(t.text, sample, 'kakao'), kakao: { pfId: settings.kakao.pfId, templateId: t.templateId, variables: kakaoVariables(kakaoFieldText(t), sample) } };
   const r = (await sendBatch(env, [item])).get('k');
   return { ok: r.ok, channel: r.channel, error: r.error, to };
