@@ -4,7 +4,7 @@ import { all, first, getSettings } from './db.js';
 import { addDays, dateKo, dateShort, dowOf, hashNum, kstNow } from './util.js';
 import { buildDay } from './context.js';
 import { oneLine } from './progress.js';
-import { renderTemplate, kakaoVariables } from './render.js';
+import { renderTemplate, kakaoVariables, kakaoFieldText } from './render.js';
 import { sendBatch, kakaoOnly } from './solapi.js';
 
 export const ATT_LABEL = { present: '출석', late: '지각', absent: '결석' };
@@ -271,7 +271,7 @@ export function buildSendItem(settings, kind, key, to, text, vars, studentStyle)
   const tpl = chooseKakao(settings, kind, style);
   return {
     key, to, text,
-    kakao: tpl ? { pfId: tpl.pfId, templateId: tpl.templateId, variables: kakaoVariables(tpl.text, vars) } : null,
+    kakao: tpl ? { pfId: tpl.pfId, templateId: tpl.templateId, variables: kakaoVariables(kakaoFieldText(tpl), vars) } : null,
     style: tpl ? tpl.style : 'sms',
   };
 }

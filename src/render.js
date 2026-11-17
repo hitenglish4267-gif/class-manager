@@ -40,6 +40,11 @@ export function kakaoFields(text) {
   return names;
 }
 
+/** 알림톡 본문 + 버튼 링크 주소를 합친 글 (버튼 주소에 들어간 #{칸}도 값을 넘기려고) */
+export function kakaoFieldText(t) {
+  return [t && t.text, t && t.buttonUrl].filter(Boolean).join('\n');
+}
+
 /** 알림톡 변수 객체 만들기 (빈 값은 '-') */
 export function kakaoVariables(text, vars) {
   const out = {};
