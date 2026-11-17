@@ -3,7 +3,7 @@
 import { h, api, icon, toast, outbox, saveLabel, kstToday, addDays, dateLabel, hmOf, confirmBox, debounce } from './core.js';
 import { S, setDate, courseTabs } from './state.js';
 
-const KINDS = [['daily', '일간'], ['missing', '미제출'], ['weekly', '주간'], ['monthly', '월간']];
+const KINDS = [['daily', '일간'], ['missing', '미제출'], ['hw5', '숙제 5회'], ['weekly', '주간'], ['monthly', '월간']];
 
 export async function renderMessages(main) {
   let kind = sessionStorage.getItem('cm_msg_kind') || 'daily';
@@ -35,6 +35,8 @@ export async function renderMessages(main) {
   if (kind === 'weekly') info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } },
     `주간 리포트는 기준일이 속한 주 월요일부터 ${sch.weekly_exclude_today ? '기준일 전날' : '기준일'}까지를 모아요. 처음엔 모두 체크 해제 상태예요 — 보낼 학생만 체크해서 보내 주세요.`));
   if (kind === 'monthly') info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } }, '월간 리포트는 그 달 1일부터 말일까지를 모아요. 보낼 학생만 체크해서 보내 주세요.'));
+  if (kind === 'hw5') info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } },
+    `숙제 미제출·미흡이 (지난 알림을 보낸 뒤로) 5회가 된 학생이 그날 자동으로 들어와요. ${sch.hw5_auto ? `${sch.send}에 자동 발송돼요.` : '확인하고 직접 보내 주세요.'} 보내고 나면 횟수는 처음부터 다시 세요.`));
   if (kind === 'missing') {
     const target = sch.missing_target || 'missing';
     info.append(h('div', { class: 'row', style: { marginBottom: '10px' } },
@@ -71,12 +73,12 @@ export async function renderMessages(main) {
       kind !== 'monthly' ? h('span', { class: 'small muted' }, dateLabel(ref)) : null);
     drawBar();
     if (!data.generated && !data.list.length) {
-      const when = kind === 'daily' || kind === 'missing' ? `매일 ${sch.preview}에 자동으로 만들어져요.` : kind === 'weekly' ? `매주 ${'일월화수목금토'[sch.weekly_day]}요일 ${sch.preview}에 자동으로 만들어져요.` : `매달 말일 ${sch.preview}에 자동으로 만들어져요.`;
+      const when = kind === 'daily' || kind === 'missing' || kind === 'hw5' ? `매일 ${sch.preview}에 자동으로 만들어져요.` : kind === 'weekly' ? `매주 ${'일월화수목금토'[sch.weekly_day]}요일 ${sch.preview}에 자동으로 만들어져요.` : `매달 말일 ${sch.preview}에 자동으로 만들어져요.`;
       list.replaceChildren(h('div', { class: 'card empty' }, h('b', null, '아직 미리보기가 없어요'), h('div', null, when),
         h('button', { class: 'btn primary mt', onclick: async (e) => { e.target.disabled = true; await outbox.flushAll(); await api('/api/messages/generate', { kind, ref }); load(); } }, '지금 미리보기 만들기')));
       return;
     }
-    if (!v.length) { list.replaceChildren(h('div', { class: 'card empty' }, h('b', null, kind === 'missing' ? '미제출 학생이 없어요' : '보낼 메시지가 없어요'))); return; }
+    if (!v.length) { list.replaceChildren(h('div', { class: 'card empty' }, h('b', null, kind === 'missing' ? '미제출 학생이 없어요' : kind === 'hw5' ? '오늘 숙제 5회 누적 학생이 없어요' : '보낼 메시지가 없어요'))); return; }
     const missingTpl = data.kakaoOnly && v.some((m) => m.noTemplate);
     list.replaceChildren(
       missingTpl ? h('div', { class: 'note bad', style: { marginBottom: '12px' } }, h('b', null, '알림톡 템플릿이 없는 메시지가 있어요. '), '알림톡 전용이라 문자로 대신 보내지 않아요. 관리 → 발송 방식에서 이 종류의 템플릿을 등록해 주세요.') : null,

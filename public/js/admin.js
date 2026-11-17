@@ -381,11 +381,12 @@ function secSend() {
   const pf = h('input', { class: 'input', value: k.pfId, placeholder: 'KA01PF…', oninput: () => { k.pfId = pf.value.trim(); saveKakao(); } });
   const styleSeg = h('div', { class: 'seg' }, [['basic', '전체 기본형'], ['cushion', '전체 쿠션형']].map(([v, l]) => h('button', { 'aria-pressed': String(k.style === v), onclick: (e) => { k.style = v; for (const b of styleSeg.children) b.setAttribute('aria-pressed', String(b === e.currentTarget)); saveKakao(); } }, l)));
   const tplBox = h('div', { class: 'stack' });
-  const KINDS = ['daily', 'missing', 'weekly', 'monthly', 'att'];
+  const KINDS = ['daily', 'missing', 'hw5', 'weekly', 'monthly', 'att', 'late'];
+  const basicOnly = A.defaults.basicOnly || [];
   const drawTpl = () => {
     tplBox.replaceChildren(...KINDS.map((kind) => h('div', { class: 'card card-pad', style: { boxShadow: 'none', background: '#fbfaf7' } },
       h('b', null, A.defaults.kinds[kind]),
-      ...['basic', 'cushion'].map((style) => {
+      ...(basicOnly.includes(kind) ? ['basic'] : ['basic', 'cushion']).map((style) => {
         const t = k.templates.find((x) => x.kind === kind && x.style === style);
         const label = style === 'basic' ? '기본형' : '쿠션멘트형';
         if (!t) return h('div', { class: 'row mt-s' }, h('span', { class: 'small muted grow' }, `${label}: 비어 있음 → ${style === 'basic' ? '문자로 나가요' : '기본형으로 나가요'}`),
@@ -506,6 +507,9 @@ function secSchedule() {
     h('div', { class: 'sec-title' }, '미제출 알림'),
     h('div', { class: 'stack' }, sw('missing_on', '미제출 알림 미리보기 만들기'), sw('missing_auto', '미제출 알림도 자동 발송'),
       h('select', { class: 'input', style: { maxWidth: '260px' }, onchange: (e) => { s.missing_target = e.target.value; save(); } }, [['missing', '대상: 미제출만'], ['missing+partial', '대상: 미제출 + 미흡']].map(([v, l]) => h('option', { value: v, selected: s.missing_target === v }, l)))),
+    h('div', { class: 'sec-title' }, '숙제 누적 5회 알림'),
+    h('div', { class: 'stack' }, sw('hw5_on', '숙제 미제출·미흡 5회가 된 학생 미리보기 만들기'), sw('hw5_auto', '숙제 5회 알림도 자동 발송'),
+      h('div', { class: 'tiny muted' }, '지난 알림을 보낸 뒤부터 미제출·미흡을 세요. 5회가 된 날 저녁 미리보기에 들어가고, 보내면 다시 0회부터 세요.')),
     h('div', { class: 'sec-title' }, '주간 · 월간 리포트'),
     h('div', { class: 'stack' }, sw('weekly_on', '주간 리포트 미리보기 만들기'),
       h('div', { class: 'row' }, h('span', { class: 'small' }, '요일'), h('select', { class: 'input', style: { width: 'auto' }, onchange: (e) => { s.weekly_day = Number(e.target.value); save(); } }, [1, 2, 3, 4, 5, 6, 0].map((d) => h('option', { value: d, selected: Number(s.weekly_day) === d }, `${DOW_KO[d]}요일`)))),
@@ -523,6 +527,7 @@ function secAtt() {
   return section('att', '출결 즉시 알림',
     h('div', { class: 'note small' }, '출결은 저녁 일간 리포트에 함께 들어가서 기본으로 모두 꺼져 있어요. 켜면 오늘 날짜에만, 학생당 하루 한 번만 나가요 (실수로 바꿔도 다시 나가지 않아요). 사유를 고른 학생에게는 나가지 않아요.'),
     h('div', { class: 'stack mt' }, sw('arrive', '등원(출석) 알림'), sw('late', '지각 알림'), sw('absent', '결석 알림')),
+    h('div', { class: 'note small mt' }, h('b', null, '지각 알림: '), '발송 방식에 "지각 즉시 알림" 템플릿을 넣으면, 반의 수업 시간과 선생님이 "지각"을 누른 시각으로 수업 시작·등원 시각·지각 분을 채워서 보내요. 학생이 도착했을 때 "지각"을 눌러 주세요. 반 수업 시간은 "16:00"처럼 적어 두세요.'),
     h('div', { class: 'mt' }, field('알림 문구', ta, '{학원} {학생명} {날짜} {출석} 칸을 쓸 수 있어요')));
 }
 
