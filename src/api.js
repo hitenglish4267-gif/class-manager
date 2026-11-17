@@ -6,7 +6,7 @@ import { buildDay } from './context.js';
 import { generate, sendMessages, refreshIfExists, attendanceAlert, buildSendItem, applyOverride, ATT_LABEL, HW_LABEL, testText } from './messages.js';
 import { solapiStatus, solapiBalance, sendBatch, authMode, kakaoOnly } from './solapi.js';
 import { oauthStatus, getAccessToken } from './solapi-oauth.js';
-import { renderTemplate, checkKakaoFields, kakaoVariables } from './render.js';
+import { renderTemplate, checkKakaoFields, kakaoVariables, kakaoFieldText } from './render.js';
 import { RECOMMENDED_KAKAO, DEFAULT_SMS, KIND_LABELS, CUSHION_LABELS } from './defaults.js';
 import { mediaStart, mediaPart, mediaComplete, mediaDelete, mediaList, r2Ready } from './media.js';
 
@@ -366,7 +366,7 @@ async function saveSetting(env, body) {
   if (body.key === 'kakao') {
     value = { pfId: String(value.pfId || '').trim(), style: value.style === 'cushion' ? 'cushion' : 'basic',
       templates: (value.templates || []).map((t) => ({ uid: t.uid || randomToken(8), kind: t.kind, style: t.style === 'cushion' ? 'cushion' : 'basic',
-        templateId: String(t.templateId || '').trim(), text: String(t.text || '').replace(/\r/g, ''), approved: t.approved !== false })),
+        templateId: String(t.templateId || '').trim(), text: String(t.text || '').replace(/\r/g, ''), buttonUrl: String(t.buttonUrl || '').trim().slice(0, 300), approved: t.approved !== false })),
       only: value.only !== false };
   }
   await setSetting(env, body.key, value);
@@ -536,7 +536,7 @@ async function kakaoTest(env, body) {
   if (!settings.kakao.pfId) throw bad('카카오 채널 ID(KA01PF…)를 먼저 넣어 주세요');
   const to = normPhone(body.phone || settings.director_phone || env.SOLAPI_SENDER);
   const sample = { 학원: settings.academy || '학원', 학원연락처: settings.academy_phone || '', 학생명: '홍길동', 반: '테스트반', 날짜: '11월 13일 (금)', 출석: '출석', 오늘할일: 'Unit 3 · 본문 읽기', 학습내용: '본문 읽기', 숙제: '워크북 12~13쪽', 다음수업: 'Unit 4', 지난숙제내용: '단어 암기', 지난숙제결과: '완료', 선생님한마디: '발표를 아주 잘했어요.', 학습성취: '발표를 아주 잘했어요.', 사진코드: 'test', 인사: '안녕하세요, 어머님!', 마무리: '감사합니다.', 출석멘트: '', 숙제멘트: '숙제를 꼼꼼하게 해 왔어요.', 주간멘트: '꾸준히 잘하고 있어요.', 기간: '11/10(월) ~ 11/13(목)', 대상월: '11월', 출석요약: '출석 4 · 지각 0 · 결석 0', 숙제완료율: '100% (미제출 0회)', 숙제현황: '100% (미제출 0회)', 진도: 'Unit 1 → Unit 4', 코멘트: '잘하고 있어요.', 보완사항: '특별히 보완할 점 없이 잘 해내고 있어요.', 다음학습계획: 'Unit 5', 시험: 'Voca 18/20 (좋음)', 시험멘트: '시험도 좋은 점수로 잘 통과했어요.', 시험요약: 'Voca 평균 92% (4회)' };
-  const item = { key: 'k', to, text: renderTemplate(t.text, sample, 'kakao'), kakao: { pfId: settings.kakao.pfId, templateId: t.templateId, variables: kakaoVariables(t.text, sample) } };
+  const item = { key: 'k', to, text: renderTemplate(t.text, sample, 'kakao'), kakao: { pfId: settings.kakao.pfId, templateId: t.templateId, variables: kakaoVariables(kakaoFieldText(t), sample) } };
   const r = (await sendBatch(env, [item])).get('k');
   return { ok: r.ok, channel: r.channel, error: r.error, to };
 }
@@ -567,7 +567,7 @@ async function oauthTest(env) {
   const tpl = (k.templates || []).find((t) => t.templateId && t.text && t.kind === 'daily') || (k.templates || []).find((t) => t.templateId && t.text);
   if (k.pfId && tpl) {
     const sample = { 학원: settings.academy || '학원', 학원연락처: settings.academy_phone || '', 학생명: '홍길동', 반: '테스트반', 날짜: '테스트', 출석: '출석', 오늘할일: '테스트', 숙제: '테스트', 다음수업: '테스트', 지난숙제내용: '테스트', 지난숙제결과: '완료', 선생님한마디: 'OAuth2 연결 테스트예요.', 학습성취: '테스트', 사진코드: 'test', 시험: 'Voca 20/20 (좋음)' };
-    const item = { key: 'k', to, text: renderTemplate(tpl.text, sample, 'kakao'), kakao: { pfId: k.pfId, templateId: tpl.templateId, variables: kakaoVariables(tpl.text, sample) } };
+    const item = { key: 'k', to, text: renderTemplate(tpl.text, sample, 'kakao'), kakao: { pfId: k.pfId, templateId: tpl.templateId, variables: kakaoVariables(kakaoFieldText(tpl), sample) } };
     const r = (await sendBatch(env, [item], { mode: 'oauth2' })).get('k');
     add('알림톡 테스트', !!r.ok, r.ok ? (r.channel === 'kakao' ? '알림톡으로 보냈어요' : '알림톡이 안 돼서 문자로 보냈어요') : r.error);
   } else if (only) add('알림톡 테스트', false, k.pfId ? '알림톡 템플릿이 아직 없어요. 카카오 승인을 받은 일간 리포트 템플릿을 먼저 등록해 주세요' : '카카오 채널 ID(KA01PF…)와 승인받은 알림톡 템플릿을 먼저 등록해 주세요');
@@ -669,7 +669,7 @@ export async function handleApi(request, env, ctx, url, version) {
     'POST /api/admin/lesson': () => { directorOnly(me); return saveLesson(env, body); },
     'POST /api/admin/test-sms': () => { directorOnly(me); return testSms(env, body); },
     'POST /api/admin/kakao-test': () => { directorOnly(me); return kakaoTest(env, body); },
-    'POST /api/admin/kakao-check': () => ({ fields: checkKakaoFields(body.text) }),
+    'POST /api/admin/kakao-check': () => ({ fields: checkKakaoFields([body.text, body.buttonUrl].filter(Boolean).join('\n')) }),
     'GET /api/admin/solapi': async () => {
       directorOnly(me);
       const st = solapiStatus(env);

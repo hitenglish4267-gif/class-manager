@@ -469,14 +469,18 @@ function oauthCard(reloadStatus) {
 function tplSlot(t, label, kind, style, saveKakao, remove) {
   const checks = h('div', { class: 'fields-check' });
   const runCheck = debounce(async () => {
-    if (!t.text.trim()) { checks.replaceChildren(); return; }
+    if (!t.text.trim() && !(t.buttonUrl || '').trim()) { checks.replaceChildren(); return; }
     try {
-      const r = await api('/api/admin/kakao-check', { text: t.text });
+      const r = await api('/api/admin/kakao-check', { text: t.text, buttonUrl: t.buttonUrl || '' });
       checks.replaceChildren(...(r.fields.length ? r.fields.map((f) => h('span', { class: 'chip ' + (f.ok ? 'ok' : 'bad'), title: f.ok ? '자동으로 채워져요' : '앱이 모르는 칸이에요' }, `${f.ok ? '✓' : '✕'} #{${f.name}}`)) : [h('span', { class: 'tiny muted' }, '#{…} 칸이 없어요')]));
     } catch { /* */ }
   }, 300);
   const id = h('input', { class: 'input', value: t.templateId, placeholder: 'KA01TP…', oninput: () => { t.templateId = id.value.trim(); saveKakao(); } });
   const ta = h('textarea', { class: 'input', rows: 8, value: t.text, placeholder: '카카오에서 승인받은 문구를 그대로 붙여 넣으세요', oninput: () => { t.text = ta.value; saveKakao(); runCheck(); } });
+  const photoUrl = `${location.origin}/g/#{사진코드}`;
+  const btn = h('input', { class: 'input', value: t.buttonUrl || '', placeholder: photoUrl, oninput: () => { t.buttonUrl = btn.value.trim(); saveKakao(); runCheck(); } });
+  const btnHelp = h('div', { class: 'tiny muted' }, '사진 보기 버튼을 넣었다면, 솔라피 템플릿 버튼에 적은 링크 주소를 그대로 적어 주세요. 예: ', h('code', null, photoUrl), ' ',
+    h('button', { class: 'btn small ghost', onclick: () => { btn.value = photoUrl; btn.dispatchEvent(new Event('input')); } }, '이 주소 넣기'));
   const approved = style === 'cushion' ? h('label', { class: 'check small' }, h('input', { type: 'checkbox', checked: t.approved !== false, onchange: (e) => { t.approved = e.target.checked; saveKakao(); } }), '승인 완료 (체크 안 하면 기본형으로 나가요)') : null;
   runCheck();
   return h('div', { class: 'mt', style: { borderTop: '1px solid var(--line)', paddingTop: '10px' } },
@@ -487,7 +491,7 @@ function tplSlot(t, label, kind, style, saveKakao, remove) {
         try { const r = await api('/api/admin/kakao-test', { uid: t.uid, phone: A.settings.director_phone }); r.ok ? toast(r.channel === 'kakao' ? '알림톡 테스트를 보냈어요' : '알림톡이 안 돼서 문자로 보냈어요') : toast(r.error, true); } catch (e) { toast(e.message, true); }
       } }, '알림톡 테스트'),
       h('button', { class: 'icon-btn', 'aria-label': '템플릿 지우기', onclick: remove }, icon('trash'))),
-    h('div', { class: 'grid2 mt-s', style: { gridTemplateColumns: '1fr 2fr' } }, field('템플릿 ID', id), field('승인받은 문구', ta)), checks, approved);
+    h('div', { class: 'grid2 mt-s', style: { gridTemplateColumns: '1fr 2fr' } }, field('템플릿 ID', id), field('승인받은 문구', ta)), field('버튼 링크 주소 (선택)', btn), btnHelp, checks, approved);
 }
 
 // ───────── 발송 일정 ─────────
