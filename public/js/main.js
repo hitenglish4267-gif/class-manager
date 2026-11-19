@@ -7,9 +7,11 @@ import { renderHomework } from './homework.js';
 import { renderMessages } from './messages.js';
 import { renderCurricula } from './curricula.js';
 import { renderAdmin } from './admin.js';
+import { renderEvals } from './evals.js';
 
 const VIEWS = [
   { id: 'today', label: '오늘 수업', icon: 'today', render: renderToday },
+  { id: 'evals', label: '학습 평가', short: '평가', icon: 'check', render: renderEvals },
   { id: 'homework', label: '숙제 현황', icon: 'hw', render: renderHomework },
   { id: 'messages', label: '학부모 메시지', short: '메시지', icon: 'msg', render: renderMessages },
   { id: 'curricula', label: '진도표', icon: 'book', render: renderCurricula },

@@ -1,6 +1,6 @@
 // 데이터베이스 표 만들기 + 설정 기본값
 
-import { DEFAULT_SMS, DEFAULT_CUSHIONS } from './defaults.js';
+import { DEFAULT_SMS, DEFAULT_CUSHIONS, DEFAULT_EVAL, DEFAULT_GROWTH } from './defaults.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT);
@@ -26,6 +26,13 @@ CREATE TABLE IF NOT EXISTS att_alerts (date TEXT, student_id INTEGER, kind TEXT,
 CREATE TABLE IF NOT EXISTS solapi_tokens (account TEXT PRIMARY KEY, enc_refresh TEXT, refresh_fp TEXT, seed_fp TEXT, enc_access TEXT, access_exp INTEGER DEFAULT 0, scope TEXT DEFAULT '', issued_at TEXT, last_refresh_at TEXT, status TEXT DEFAULT 'ready', error TEXT DEFAULT '', lock_id TEXT, lock_until INTEGER DEFAULT 0, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS msg_overrides (message_id INTEGER PRIMARY KEY, comment TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS jobs (job TEXT, date TEXT, done_at TEXT, PRIMARY KEY(job, date));
+CREATE TABLE IF NOT EXISTS evals (date TEXT, student_id INTEGER, item TEXT, marks TEXT, teacher_id INTEGER, updated_at TEXT, PRIMARY KEY(date, student_id, item));
+CREATE INDEX IF NOT EXISTS evals_student ON evals(student_id, date);
+CREATE TABLE IF NOT EXISTS eval_days (date TEXT, class_id INTEGER, items TEXT, teacher_id INTEGER, updated_at TEXT, PRIMARY KEY(date, class_id));
+CREATE TABLE IF NOT EXISTS daynotes (date TEXT, student_id INTEGER, teacher_id INTEGER, done TEXT DEFAULT '', next_plan TEXT DEFAULT '', retest TEXT DEFAULT '', mistakes TEXT DEFAULT '', weak TEXT DEFAULT '', extra_done TEXT DEFAULT '', extra_need TEXT DEFAULT '', special TEXT DEFAULT '', memo TEXT DEFAULT '', updated_at TEXT, PRIMARY KEY(date, student_id));
+CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, ref TEXT, student_id INTEGER, token TEXT, facts TEXT, ai TEXT, edited TEXT, source TEXT DEFAULT '', model TEXT DEFAULT '', status TEXT DEFAULT 'queued', error TEXT DEFAULT '', tries INTEGER DEFAULT 0, fails INTEGER DEFAULT 0, fail_at INTEGER DEFAULT 0, viewed_at TEXT, created_at TEXT, updated_at TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS reports_uk ON reports(kind, ref, student_id);
+CREATE UNIQUE INDEX IF NOT EXISTS reports_token ON reports(token);
 `;
 
 let ready = false;
@@ -56,6 +63,8 @@ export const DEFAULT_SETTINGS = {
   sms_templates: DEFAULT_SMS,
   cushions: DEFAULT_CUSHIONS,
   kakao: { pfId: '', style: 'basic', templates: [], only: true },
+  eval: DEFAULT_EVAL,
+  growth: DEFAULT_GROWTH,
 };
 
 export async function getSettings(env) {
