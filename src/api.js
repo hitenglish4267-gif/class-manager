@@ -9,6 +9,7 @@ import { oauthStatus, getAccessToken } from './solapi-oauth.js';
 import { renderTemplate, checkKakaoFields, kakaoVariables, kakaoFieldText } from './render.js';
 import { RECOMMENDED_KAKAO, DEFAULT_SMS, KIND_LABELS, CUSHION_LABELS, BASIC_ONLY_KINDS } from './defaults.js';
 import { mediaStart, mediaPart, mediaComplete, mediaDelete, mediaList, r2Ready } from './media.js';
+import { evalDay, saveEvalMarks, saveDayNote, saveEvalDayItems, processQueue, contentOf, cleanContent, ruleWrite, reportHtml, reportText, growthSettings, weekOf, NOTE_FIELDS, EVAL_MARKS } from './growth.js';
 
 const SESSION_DAYS = 60;
 
@@ -105,7 +106,7 @@ async function meta(env, me) {
   return {
     me, academy: settings.academy, courses, curricula, teachers,
     hw_buttons: settings.hw_buttons, reasons: settings.reasons, schedule: settings.schedule, tests: settings.tests,
-    r2: r2Ready(env), today: kstNow().date,
+    r2: r2Ready(env), today: kstNow().date, growth: growthSettings(settings), evalMarks: EVAL_MARKS,
   };
 }
 
@@ -257,7 +258,8 @@ async function homework(env, me, url) {
 // ───────── 학부모 메시지 ─────────
 async function listMessages(env, me, url) {
   const kind = url.searchParams.get('kind') || 'daily';
-  const ref = url.searchParams.get('ref') || kstNow().date;
+  let ref = url.searchParams.get('ref') || kstNow().date;
+  if (kind === 'growth') ref = weekOf(ref).ref;
   const exists = await first(env, 'SELECT id FROM messages WHERE kind = ? AND ref = ? LIMIT 1', kind, ref);
   if (exists) await generate(env, kind, ref); // 열 때마다 가장 최근 수업 기록으로 다시 맞추기
   const vis = await visibleStudentIds(env, me);
@@ -283,7 +285,74 @@ async function listMessages(env, me, url) {
       kakaoPreview: item.kakao ? renderTemplate((settings.kakao.templates || []).find((t) => t.templateId === item.kakao.templateId)?.text || '', vars, 'kakao') : '',
     };
   });
+  if (kind === 'growth') {
+    const reps = await all(env, "SELECT id, student_id, status, source, error, edited, viewed_at FROM reports WHERE kind = 'weekly' AND ref = ?", ref);
+    const rMap = new Map(reps.map((r) => [r.student_id, r]));
+    for (const m of list) { const r = rMap.get(m.student_id); if (r) Object.assign(m, { report_id: r.id, report_status: r.status, report_source: r.source, report_error: r.error, report_edited: !!r.edited, report_viewed: r.viewed_at }); }
+  }
   return { kind, ref, generated: !!exists, list, kakaoOnly: only };
+}
+
+// ───────── 학습 평가 (일일) ─────────
+async function evalsGet(env, me, url) {
+  const date = String(url.searchParams.get('date') || kstNow().date);
+  const classId = Number(url.searchParams.get('class_id'));
+  if (!(await teacherOwnsClass(env, me, classId))) throw new HttpError(403, '내 반이 아니에요');
+  const settings = await getSettings(env);
+  const ctx = await buildDay(env, date, { classId, allDays: true });
+  const cls = ctx.classes[0];
+  if (!cls) throw bad('반을 찾을 수 없어요');
+  const students = cls.students.map((s) => {
+    const p = (cls.type === 'individual' ? s.progress : cls.progress) || {};
+    const cur = ctx.curricula.get(p.curriculum_id || (cls.type === 'individual' ? s.curriculum_id : cls.curriculum_id));
+    return {
+      id: s.id, name: s.name, att: ATT_LABEL[s.day.att] || '', reason: s.day.reason || '', hw: HW_LABEL[s.day.hw] || '',
+      tests: testText(s.tests), comment: s.day.comment || '', book: cur ? cur.name : '', planned: p.today || '', next: p.next || '',
+    };
+  });
+  const d = await evalDay(env, settings, classId, date, students);
+  return { date, class: { id: cls.id, name: cls.name, time: cls.time }, students, noteFields: NOTE_FIELDS, ...d };
+}
+
+// ───────── 주간 성장 리포트 ─────────
+async function reportRow(env, me, id) {
+  const r = await first(env, 'SELECT r.*, s.name AS student_name FROM reports r LEFT JOIN students s ON s.id = r.student_id WHERE r.id = ?', Number(id));
+  if (!r) throw bad('리포트를 찾을 수 없어요');
+  await assertStudent(env, me, r.student_id);
+  return r;
+}
+async function reportGet(env, me, url) {
+  const r = await reportRow(env, me, url.searchParams.get('id'));
+  const settings = await getSettings(env);
+  const facts = JSON.parse(r.facts || '{}');
+  const c = contentOf(r) || cleanContent(ruleWrite(facts));
+  const base = String(settings.base_url || '').replace(/\/+$/, '');
+  return {
+    id: r.id, student: r.student_name, ref: r.ref, status: r.status, source: r.source, model: r.model, error: r.error, edited: !!r.edited,
+    viewed_at: r.viewed_at, link: base ? `${base}/r/${r.token}` : `/r/${r.token}`, content: c,
+    text: reportText(settings, facts, c), html: reportHtml(settings, r, facts, c, { noTools: true }),
+  };
+}
+async function reportEdit(env, me, body) {
+  const r = await reportRow(env, me, body.id);
+  const c = body.reset ? null : JSON.stringify(cleanContent(body.content || {}));
+  await run(env, 'UPDATE reports SET edited = ?, updated_at = ? WHERE id = ?', c, kstNow().stamp, r.id);
+  return { ok: true, saved_at: kstNow().stamp };
+}
+async function reportRegenerate(env, me, body) {
+  const r = await reportRow(env, me, body.id);
+  await run(env, "UPDATE reports SET edited = NULL, status = 'queued', tries = 0 WHERE id = ?", r.id);
+  await processQueue(env, { id: r.id });
+  await generate(env, 'growth', r.ref);
+  return { ok: true };
+}
+async function reportProcess(env, body) {
+  const ref = weekOf(String(body.ref || kstNow().date)).ref;
+  await generate(env, 'growth', ref);
+  const done = await processQueue(env, { limit: 2 });
+  if (done.length) await generate(env, 'growth', ref);
+  const left = await first(env, "SELECT COUNT(*) AS n FROM reports WHERE kind = 'weekly' AND ref = ? AND status = 'queued'", ref);
+  return { ok: true, left: left ? left.n : 0 };
 }
 
 async function checkMessages(env, me, body) {
@@ -350,18 +419,30 @@ async function adminData(env) {
   const students = await all(env, 'SELECT id, name, class_id, phone, course_id, curriculum_id, start_seq, code, msg_style FROM students WHERE deleted = 0 ORDER BY name');
   return {
     settings: safe, teachers, classes, students,
-    solapi: solapiStatus(env), r2: r2Ready(env),
+    solapi: solapiStatus(env), r2: r2Ready(env), ai: !!env.AI,
     defaults: { sms: DEFAULT_SMS, kakao: RECOMMENDED_KAKAO, kinds: KIND_LABELS, basicOnly: BASIC_ONLY_KINDS, cushionLabels: CUSHION_LABELS, cushions: DEFAULT_SETTINGS.cushions },
   };
 }
 
-const SETTING_KEYS = new Set(['academy', 'base_url', 'director_phone', 'academy_phone', 'hw_buttons', 'reasons', 'schedule', 'att_alerts', 'sms_templates', 'cushions', 'kakao', 'tests']);
+const SETTING_KEYS = new Set(['academy', 'base_url', 'director_phone', 'academy_phone', 'hw_buttons', 'reasons', 'schedule', 'att_alerts', 'sms_templates', 'cushions', 'kakao', 'tests', 'eval', 'growth']);
 async function saveSetting(env, body) {
   if (!SETTING_KEYS.has(body.key)) throw bad('바꿀 수 없는 설정이에요');
   let value = body.value;
   const warnings = [];
   if (body.key === 'sms_templates') {
     for (const [k, v] of Object.entries(value || {})) if (/#\{/.test(v)) warnings.push(`${KIND_LABELS[k] || k}: #{…} 칸은 알림톡용이에요. "발송 방식"의 알림톡 칸에 넣어 주세요.`);
+  }
+  if (body.key === 'eval') {
+    const items = (value.items || []).map((i) => ({ id: String(i.id || randomToken(6)).slice(0, 20), name: String(i.name || '').trim().slice(0, 40), group: i.group === 'attitude' ? 'attitude' : 'area' })).filter((i) => i.name);
+    const byClass = {};
+    for (const [k, v] of Object.entries(value.byClass || {})) if (Array.isArray(v) && v.length) byClass[String(Number(k))] = v.map(String).filter((id) => items.some((i) => i.id === id));
+    value = { items, byClass };
+  }
+  if (body.key === 'growth') {
+    const hm = (v, d) => (/^\d{2}:\d{2}$/.test(String(v)) ? String(v) : d);
+    value = { on: value.on !== false, day: Math.min(6, Math.max(0, Number(value.day ?? 6))), gen: hm(value.gen, '07:00'), send: hm(value.send, '12:00'),
+      auto: value.auto !== false, model: String(value.model || '@cf/google/gemma-4-26b-a4b-it').slice(0, 80), per_tick: Math.min(10, Math.max(1, Number(value.per_tick) || 4)),
+      brand: String(value.brand || 'PAMUS ENGLISH').slice(0, 40) };
   }
   if (body.key === 'kakao') {
     value = { pfId: String(value.pfId || '').trim(), style: value.style === 'cushion' ? 'cushion' : 'basic',
@@ -640,6 +721,27 @@ export async function handleApi(request, env, ctx, url, version) {
 
   const R = {
     'GET /api/meta': () => meta(env, me),
+    'GET /api/evals': () => evalsGet(env, me, url),
+    'POST /api/evals': async () => {
+      await assertStudent(env, me, body.student_id);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(body.date))) throw bad('날짜가 올바르지 않아요');
+      const stamp = await saveEvalMarks(env, me, body.date, Number(body.student_id), body.marks);
+      return { ok: true, saved_at: stamp };
+    },
+    'POST /api/evals/items': async () => {
+      if (!(await teacherOwnsClass(env, me, body.class_id))) throw new HttpError(403, '내 반이 아니에요');
+      await saveEvalDayItems(env, me, String(body.date), body.class_id, body.items);
+      return { ok: true, saved_at: kstNow().stamp };
+    },
+    'POST /api/daynotes': async () => {
+      await assertStudent(env, me, body.student_id);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(body.date))) throw bad('날짜가 올바르지 않아요');
+      return { ok: true, saved_at: await saveDayNote(env, me, body.date, Number(body.student_id), body.fields) };
+    },
+    'GET /api/report': () => reportGet(env, me, url),
+    'POST /api/report/edit': () => reportEdit(env, me, body),
+    'POST /api/report/regenerate': () => reportRegenerate(env, me, body),
+    'POST /api/report/process': () => reportProcess(env, body),
     'GET /api/today': () => today(env, me, url),
     'POST /api/attendance': () => saveAttendance(env, me, body, ctx),
     'POST /api/attendance/all': () => attendanceAll(env, me, body, ctx),

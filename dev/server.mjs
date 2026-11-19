@@ -61,7 +61,7 @@ const R2 = {
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 const ASSETS = {
   async fetch(req) {
-    const u = new URL(req.url);
+    const u = new URL(req.url || String(req));
     let f = path.join(ROOT, 'public', decodeURIComponent(u.pathname));
     if (!fs.existsSync(f) || fs.statSync(f).isDirectory()) f = path.join(ROOT, 'public', 'index.html');
     return new Response(fs.readFileSync(f), { headers: { 'content-type': TYPES[path.extname(f)] || 'application/octet-stream' } });

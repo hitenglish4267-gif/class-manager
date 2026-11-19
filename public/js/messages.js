@@ -1,13 +1,14 @@
 // 학부모 메시지: 미리보기 확인 → 체크 → 보내기
 
-import { h, api, icon, toast, outbox, saveLabel, kstToday, addDays, dateLabel, hmOf, confirmBox, debounce } from './core.js';
+import { h, api, icon, toast, outbox, saveLabel, kstToday, addDays, dateLabel, hmOf, confirmBox, debounce, sheet, copyText, dowOf } from './core.js';
 import { S, setDate, courseTabs } from './state.js';
 
-const KINDS = [['daily', '일간'], ['missing', '미제출'], ['hw5', '숙제 5회'], ['weekly', '주간'], ['monthly', '월간']];
+const KINDS = [['daily', '일간'], ['missing', '미제출'], ['hw5', '숙제 5회'], ['growth', '성장 리포트'], ['weekly', '주간'], ['monthly', '월간']];
+const saturdayOf = (d) => { const w = dowOf(d); return w === 0 ? addDays(d, -1) : addDays(d, 6 - w); };
 
 export async function renderMessages(main) {
   let kind = sessionStorage.getItem('cm_msg_kind') || 'daily';
-  let ref = kind === 'monthly' ? (sessionStorage.getItem('cm_msg_month') || kstToday().slice(0, 7)) : S.date;
+  let ref = kind === 'monthly' ? (sessionStorage.getItem('cm_msg_month') || kstToday().slice(0, 7)) : kind === 'growth' ? saturdayOf(S.date) : S.date;
   let data = null;
   const checks = {}; // 이번 화면에서 바꾼 체크 상태 (자동 저장)
   let sending = false;
@@ -35,6 +36,13 @@ export async function renderMessages(main) {
   if (kind === 'weekly') info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } },
     `주간 리포트는 기준일이 속한 주 월요일부터 ${sch.weekly_exclude_today ? '기준일 전날' : '기준일'}까지를 모아요. 처음엔 모두 체크 해제 상태예요 — 보낼 학생만 체크해서 보내 주세요.`));
   if (kind === 'monthly') info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } }, '월간 리포트는 그 달 1일부터 말일까지를 모아요. 보낼 학생만 체크해서 보내 주세요.'));
+  if (kind === 'growth') {
+    const g = S.meta.growth || {};
+    info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } },
+      `${addDays(ref, -5).slice(5).replace('-', '/')}(월) ~ ${addDays(ref, -1).slice(5).replace('-', '/')}(금) 기록으로 만든 리포트예요. `,
+      `매주 ${'일월화수목금토'[g.day ?? 6]}요일 ${g.gen || '07:00'}부터 AI가 몇 명씩 써요. 내용을 확인하고 "승인"을 체크하면 `,
+      g.auto ? `${g.send || '12:00'}에 승인된 리포트만 자동으로 보내요.` : '"지금 보내기"로 보내 주세요.'));
+  }
   if (kind === 'hw5') info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } },
     `숙제 미제출·미흡이 (지난 알림을 보낸 뒤로) 5회가 된 학생이 그날 자동으로 들어와요. ${sch.hw5_auto ? `${sch.send}에 자동 발송돼요.` : '확인하고 직접 보내 주세요.'} 보내고 나면 횟수는 처음부터 다시 세요.`));
   if (kind === 'missing') {
@@ -73,9 +81,9 @@ export async function renderMessages(main) {
       kind !== 'monthly' ? h('span', { class: 'small muted' }, dateLabel(ref)) : null);
     drawBar();
     if (!data.generated && !data.list.length) {
-      const when = kind === 'daily' || kind === 'missing' || kind === 'hw5' ? `매일 ${sch.preview}에 자동으로 만들어져요.` : kind === 'weekly' ? `매주 ${'일월화수목금토'[sch.weekly_day]}요일 ${sch.preview}에 자동으로 만들어져요.` : `매달 말일 ${sch.preview}에 자동으로 만들어져요.`;
+      const when = kind === 'growth' ? `매주 ${'일월화수목금토'[(S.meta.growth || {}).day ?? 6]}요일 ${(S.meta.growth || {}).gen || '07:00'}에 자동으로 만들어져요.` : kind === 'daily' || kind === 'missing' || kind === 'hw5' ? `매일 ${sch.preview}에 자동으로 만들어져요.` : kind === 'weekly' ? `매주 ${'일월화수목금토'[sch.weekly_day]}요일 ${sch.preview}에 자동으로 만들어져요.` : `매달 말일 ${sch.preview}에 자동으로 만들어져요.`;
       list.replaceChildren(h('div', { class: 'card empty' }, h('b', null, '아직 미리보기가 없어요'), h('div', null, when),
-        h('button', { class: 'btn primary mt', onclick: async (e) => { e.target.disabled = true; await outbox.flushAll(); await api('/api/messages/generate', { kind, ref }); load(); } }, '지금 미리보기 만들기')));
+        h('button', { class: 'btn primary mt', onclick: async (e) => { e.target.disabled = true; await outbox.flushAll(); await api('/api/messages/generate', { kind, ref }); if (kind === 'growth') return runAi(e.target); load(); } }, kind === 'growth' ? '지금 리포트 만들기' : '지금 미리보기 만들기')));
       return;
     }
     if (!v.length) { list.replaceChildren(h('div', { class: 'card empty' }, h('b', null, kind === 'missing' ? '미제출 학생이 없어요' : kind === 'hw5' ? '오늘 숙제 5회 누적 학생이 없어요' : '보낼 메시지가 없어요'))); return; }
@@ -93,13 +101,16 @@ export async function renderMessages(main) {
     const canCheck = v.filter((m) => !m.checked && !m.locked && m.status !== 'sent');
     const canUncheck = v.filter((m) => m.checked);
     const n = checkedList().length;
+    const G = kind === 'growth';
+    const queued = G ? v.filter((m) => m.report_status === 'queued').length : 0;
     bar.replaceChildren(
-      h('button', { class: 'btn small', disabled: !canCheck.length, onclick: () => bulk(canCheck, 1) }, '모두 체크'),
-      h('button', { class: 'btn small', disabled: !canUncheck.length, onclick: () => bulk(canUncheck, 0) }, '모두 해제'),
+      h('button', { class: 'btn small', disabled: !canCheck.length, onclick: () => bulk(canCheck, 1) }, G ? '모두 승인' : '모두 체크'),
+      h('button', { class: 'btn small', disabled: !canUncheck.length, onclick: () => bulk(canUncheck, 0) }, G ? '승인 모두 해제' : '모두 해제'),
+      G && queued ? h('button', { class: 'btn small primary', onclick: (e) => runAi(e.target) }, `AI로 지금 쓰기 (${queued}명 남음)`) : null,
       data && (data.generated || data.list.length) ? h('button', { class: 'btn small ghost', onclick: async (e) => {
         e.target.disabled = true; await outbox.flushAll(); await api('/api/messages/generate', { kind, ref }); toast('최신 수업 기록으로 다시 만들었어요'); load();
       } }, '미리보기 다시 만들기') : null,
-      h('button', { class: 'btn primary', style: { marginLeft: 'auto' }, disabled: !n || sending, onclick: sendChecked }, sending ? '보내는 중…' : `체크된 ${n}건 지금 보내기`));
+      h('button', { class: 'btn primary', style: { marginLeft: 'auto' }, disabled: !n || sending, onclick: sendChecked }, sending ? '보내는 중…' : kind === 'growth' ? `승인된 ${n}건 지금 보내기` : `체크된 ${n}건 지금 보내기`));
   }
 
   function setChecked(m, val) {
@@ -150,6 +161,7 @@ export async function renderMessages(main) {
     const st = m.status === 'sent' ? h('span', { class: 'chip ok' }, `✓ 전송됨 ${hmOf(m.sent_at)}${m.channel ? ' · ' + m.channel : ''}`)
       : m.status === 'failed' ? h('span', { class: 'chip bad' }, '✕ 실패')
         : m.status === 'sending' ? h('span', { class: 'chip warn' }, '보내는 중') : null;
+    if (kind === 'growth') return growthCard(m, cb, st);
     if (data.kakaoOnly) return kakaoCard(m, cb, st);
     const kakaoBox = m.kakaoPreview ? h('pre', { class: 'note small hidden', style: { whiteSpace: 'pre-wrap', margin: '8px 0 0', fontFamily: 'inherit' } }, m.kakaoPreview) : null;
     const el = h('section', { class: 'card msg' + (m.status === 'sent' ? ' sent' : '') + (m.locked ? ' locked' : '') },
@@ -169,6 +181,73 @@ export async function renderMessages(main) {
     const paint = () => { const s = saveLabel(`msg:${m.id}`); saveSt.className = 'savest ' + s.cls; saveSt.textContent = outbox.get(`msg:${m.id}`) || s.cls ? (s.cls ? s.text : '') : ''; };
     paint();
     return el;
+  }
+
+  // ── 주간 성장 리포트 ──
+  async function runAi(btn) {
+    if (btn) btn.disabled = true;
+    let left = 1, guard = 0;
+    while (left > 0 && guard++ < 60) {
+      try { const r = await api('/api/report/process', { ref }); left = r.left; if (btn) btn.textContent = left ? `AI가 쓰는 중… (${left}명 남음)` : '다 썼어요'; }
+      catch (e) { toast(e.message, true); break; }
+    }
+    load();
+  }
+  function growthCard(m, cb, st) {
+    const ready = m.report_status === 'ready';
+    if (!ready && !m.checked) cb.disabled = true;
+    const src = !ready ? h('span', { class: 'chip warn' }, 'AI 작성 중') : m.report_source === 'rule' ? h('span', { class: 'chip warn', title: m.report_error || '' }, '기록만으로 정리 (AI 미사용)') : h('span', { class: 'chip info' }, m.report_edited ? 'AI 작성 · 직접 수정함' : 'AI 작성');
+    return h('section', { class: 'card msg' + (m.status === 'sent' ? ' sent' : '') + (m.locked ? ' locked' : '') },
+      h('div', { class: 'msg-head' },
+        h('label', { class: 'check' }, cb, h('b', null, m.student_name), h('span', { class: 'tiny muted', style: { marginLeft: '4px' } }, '승인')),
+        h('span', { class: 'small muted' }, m.class_name || ''), src,
+        m.noTemplate ? h('span', { class: 'chip bad' }, '알림톡 템플릿 없음') : h('span', { class: 'chip line' }, m.via),
+        m.report_viewed ? h('span', { class: 'chip ok' }, `학부모 열람 ${hmOf(m.report_viewed)}`) : null, st),
+      m.noTemplate ? h('div', { class: 'note bad small' }, '"주간 성장 리포트" 알림톡 템플릿이 아직 없어요. 관리 → 발송 방식에서 카카오 승인을 받은 템플릿을 등록해 주세요.')
+        : h('pre', { class: 'kakao-preview' }, m.kakaoPreview || m.text || ''),
+      m.status === 'failed' && m.error ? h('div', { class: 'note bad small mt-s' }, '실패 이유: ', m.error) : null,
+      h('div', { class: 'msg-foot' },
+        h('button', { class: 'btn small', disabled: !m.report_id, onclick: () => openReport(m) }, '리포트 보기 · 수정'),
+        ready && !m.noTemplate ? h('button', { class: 'btn small ghost', onclick: async () => {
+          if (!(await confirmBox('이 학생만 보낼까요?', `${m.student_name} 학부모님께 주간 성장 리포트를 보냅니다.`, '보내기'))) return;
+          try { const r = await api('/api/messages/send', { ids: [m.id], resend: m.status === 'sent' }); toast(r.failed ? '보내지 못했어요' : '보냈어요', !!r.failed); } catch (e) { toast(e.message, true); }
+          load();
+        } }, '이 학생만 보내기') : null));
+  }
+  async function openReport(m) {
+    let R;
+    try { R = await api(`/api/report?id=${m.report_id}`); } catch (e) { toast(e.message, true); return; }
+    const FIELDS = [['overview', '학습 성취도 (총평)'], ['concepts', '이번 주 주요 학습 개념'], ['strengths', '잘하고 있는 부분'], ['growth', '지난주보다 성장한 부분'],
+      ['practice', '조금 더 연습이 필요한 부분'], ['weak_concepts', '어려워하는 학습 개념'], ['academy_done', '이번 주 학원에서 지도한 내용'], ['academy_plan', '앞으로 학원에서 지도할 계획'],
+      ['next_week', '다음 주 학습 예정'], ['home_tips', '가정에서 도와주시면 좋은 부분'], ['teacher_comment', '선생님의 특별 코멘트']];
+    const LIST = new Set(['strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'home_tips']);
+    sheet(`${R.student} 주간 성장 리포트`, (close) => {
+      const frame = h('iframe', { class: 'rep-frame', title: '리포트 미리보기' });
+      frame.srcdoc = R.html;
+      const c = { ...R.content };
+      const tas = FIELDS.map(([k, label]) => {
+        const ta = h('textarea', { class: 'input', value: LIST.has(k) ? (c[k] || []).join('\n') : (c[k] || ''), oninput: () => { c[k] = LIST.has(k) ? ta.value.split('\n').map((x) => x.trim()).filter(Boolean) : ta.value; } });
+        return h('label', { class: 'field mt-s' }, h('span', { class: 'lbl' }, label, LIST.has(k) ? h('span', { class: 'tiny muted', style: { fontWeight: 500 } }, ' — 한 줄에 하나씩') : null), ta);
+      });
+      const edit = h('div', { class: 'rep-edit hidden' }, ...tas,
+        h('div', { class: 'row mt' },
+          h('button', { class: 'btn primary', onclick: async () => { try { await api('/api/report/edit', { id: R.id, content: c }); toast('고친 내용을 저장했어요'); close(); openReport(m); load(); } catch (e) { toast(e.message, true); } } }, '고친 내용 저장'),
+          R.edited ? h('button', { class: 'btn ghost', onclick: async () => { await api('/api/report/edit', { id: R.id, reset: true }); toast('AI가 쓴 문장으로 되돌렸어요'); close(); openReport(m); } }, 'AI 문장으로 되돌리기') : null));
+      return h('div', null,
+        R.source === 'rule' ? h('div', { class: 'note warn small' }, 'AI를 쓰지 못해서 수업 기록만으로 정리했어요', R.error ? ` (${R.error})` : '', '. "AI 다시 쓰기"를 눌러 볼 수 있어요.') : null,
+        h('div', { class: 'row', style: { marginBottom: '8px' } },
+          h('button', { class: 'btn small', onclick: () => edit.classList.toggle('hidden') }, '직접 수정'),
+          h('button', { class: 'btn small', onclick: async (e) => {
+            if (R.edited && !(await confirmBox('AI로 다시 쓸까요?', '직접 고친 내용은 사라지고 AI가 새로 써요.', '다시 쓰기', true))) return;
+            e.target.disabled = true; e.target.textContent = 'AI가 쓰는 중…';
+            try { await api('/api/report/regenerate', { id: R.id }); toast('새로 썼어요'); close(); openReport(m); load(); } catch (err) { toast(err.message, true); e.target.disabled = false; }
+          } }, 'AI 다시 쓰기'),
+          h('button', { class: 'btn small', onclick: () => copyText(R.text) }, '카카오톡용 텍스트 복사'),
+          h('button', { class: 'btn small', onclick: () => frame.contentWindow && frame.contentWindow.print() }, 'PDF 저장 · 인쇄'),
+          h('button', { class: 'btn small ghost', onclick: () => copyText(R.link) }, '학부모 링크 복사')),
+        frame, edit,
+        h('div', { class: 'tiny muted mt-s' }, '학부모님은 링크를 열 때 휴대폰 번호 뒷자리 4자리를 입력해야 볼 수 있어요.', R.model ? ` · AI: ${R.model.replace('@cf/', '')}` : ''));
+    });
   }
 
   async function sendChecked() {

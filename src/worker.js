@@ -7,6 +7,7 @@ import { handleApi } from './api.js';
 import { serveMedia, galleryPage, cleanupMedia } from './media.js';
 import { generate, sendMessages } from './messages.js';
 import { buildDay } from './context.js';
+import { reportPage, processQueue, growthSettings, weekOf } from './growth.js';
 
 function versionOf(env) {
   const id = env.CF_VERSION_METADATA && env.CF_VERSION_METADATA.id;
@@ -23,6 +24,7 @@ export default {
       let m;
       if ((m = url.pathname.match(/^\/m\/([A-Za-z0-9]+)$/))) return await serveMedia(env, ctx, m[1], request);
       if ((m = url.pathname.match(/^\/g\/([A-Za-z0-9]+)$/))) return await galleryPage(env, m[1]);
+      if ((m = url.pathname.match(/^\/r\/([A-Za-z0-9]+)$/))) return await reportPage(env, request, m[1]);
       if (url.pathname === '/' || url.pathname === '/index.html') {
         // 화면 파일에 버전 번호를 넣어서, 새로 배포하면 휴대폰에 옛날 화면이 남지 않게
               const res = await env.ASSETS.fetch(new URL('/', url));
@@ -120,6 +122,18 @@ export async function runSchedule(env, nowMs = Date.now()) {
       await generate(env, 'monthly', ref, { settings });
       await sendMessages(env, await idsToSend(env, 'monthly', ref), { auto: true });
     }
+  }
+
+  // 주간 성장 리포트: 정한 요일·시간에 만들기 시작 → 10분마다 몇 명씩 AI로 쓰기 → 발송 시간에 "승인된" 것만 보내기
+  const g = growthSettings(settings);
+  if (g.on && now.dow === Number(g.day) && mins >= hmToMin(g.gen) && await claimJob(env, 'growth-gen', now.date)) {
+    await generate(env, 'growth', now.date, { settings });
+  }
+  const refs = await processQueue(env, { settings });
+  for (const ref of refs) await generate(env, 'growth', ref, { settings });
+  const gdiff = mins - hmToMin(g.send);
+  if (g.on && g.auto && now.dow === Number(g.day) && gdiff >= 0 && gdiff < 120 && await claimJob(env, 'growth-send', now.date)) {
+    await sendMessages(env, await idsToSend(env, 'growth', weekOf(now.date).ref), { auto: true });
   }
 
   if (await claimJob(env, 'cleanup', now.date)) {

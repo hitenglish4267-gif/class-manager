@@ -6,7 +6,7 @@ import { parseDelimited, readTableFile, mapStudents, studentsFromPdf } from './p
 import { refreshTitle } from './main.js';
 
 let A = null; // 관리 데이터
-const SECTIONS = [['aca', '학원'], ['teachers', '선생님'], ['courses', '과정'], ['classes', '반'], ['students', '학생'], ['hw', '숙제 버튼'], ['tpl', '메시지 문구'], ['cushion', '쿠션 멘트'], ['send', '발송 방식'], ['schedule', '발송 일정'], ['att', '출결 알림'], ['media', '사진·영상'], ['export', '기록 내려받기']];
+const SECTIONS = [['aca', '학원'], ['teachers', '선생님'], ['courses', '과정'], ['classes', '반'], ['students', '학생'], ['hw', '숙제 버튼'], ['tpl', '메시지 문구'], ['cushion', '쿠션 멘트'], ['send', '발송 방식'], ['schedule', '발송 일정'], ['att', '출결 알림'], ['evalitems', '평가 항목'], ['growth', '성장 리포트'], ['media', '사진·영상'], ['export', '기록 내려받기']];
 
 function setSetting(key, value, delay = 800) {
   A.settings[key] = value;
@@ -20,7 +20,7 @@ export async function renderAdmin(main) {
   try { A = await api('/api/admin'); S.meta = await api('/api/meta'); } catch (e) { main.replaceChildren(h('div', { class: 'note bad' }, e.message)); return; }
   const nav = h('div', { class: 'admin-nav' }, SECTIONS.map(([id, l]) => h('button', { class: 'tab', onclick: () => $(`#sec-${id}`).scrollIntoView({ behavior: 'smooth' }) }, l)));
   main.replaceChildren(nav,
-    h('div', { class: 'stack' }, secAcademy(), secTeachers(), secCourses(), secClasses(), secStudents(), secHw(), secTemplates(), secCushions(), secSend(), secSchedule(), secAtt(), secMedia(), secExport()));
+    h('div', { class: 'stack' }, secAcademy(), secTeachers(), secCourses(), secClasses(), secStudents(), secHw(), secTemplates(), secCushions(), secSend(), secSchedule(), secAtt(), secEvalItems(), secGrowth(), secMedia(), secExport()));
   const off = outbox.on((key) => {
     if (!key.startsWith('set:')) return;
     const st = saveState.get(key);
@@ -29,7 +29,7 @@ export async function renderAdmin(main) {
     for (const el of document.querySelectorAll('[data-sec]')) if (el.dataset.watch && el.dataset.watch.split(',').includes(key)) { el.className = 'savest small ' + lab.cls; el.textContent = lab.cls ? lab.text : ''; }
   });
   S.stopPoll = () => off();
-  const watch = { aca: 'set:academy,set:director_phone,set:academy_phone', hw: 'set:hw_buttons,set:reasons,set:tests', tpl: 'set:sms_templates', cushion: 'set:cushions', send: 'set:kakao', schedule: 'set:schedule', att: 'set:att_alerts,set:sms_templates' };
+  const watch = { aca: 'set:academy,set:director_phone,set:academy_phone', hw: 'set:hw_buttons,set:reasons,set:tests', tpl: 'set:sms_templates', cushion: 'set:cushions', send: 'set:kakao', schedule: 'set:schedule', att: 'set:att_alerts,set:sms_templates', evalitems: 'set:eval', growth: 'set:growth' };
   for (const [id, keys] of Object.entries(watch)) { const el = document.querySelector(`[data-sec="${id}"]`); if (el) el.dataset.watch = keys; }
   if (location.hash.includes('admin') && !A.settings.academy) $('#sec-aca input')?.focus();
 }
@@ -381,7 +381,7 @@ function secSend() {
   const pf = h('input', { class: 'input', value: k.pfId, placeholder: 'KA01PF…', oninput: () => { k.pfId = pf.value.trim(); saveKakao(); } });
   const styleSeg = h('div', { class: 'seg' }, [['basic', '전체 기본형'], ['cushion', '전체 쿠션형']].map(([v, l]) => h('button', { 'aria-pressed': String(k.style === v), onclick: (e) => { k.style = v; for (const b of styleSeg.children) b.setAttribute('aria-pressed', String(b === e.currentTarget)); saveKakao(); } }, l)));
   const tplBox = h('div', { class: 'stack' });
-  const KINDS = ['daily', 'missing', 'hw5', 'weekly', 'monthly', 'att', 'late'];
+  const KINDS = ['daily', 'missing', 'hw5', 'growth', 'weekly', 'monthly', 'att', 'late'];
   const basicOnly = A.defaults.basicOnly || [];
   const drawTpl = () => {
     tplBox.replaceChildren(...KINDS.map((kind) => h('div', { class: 'card card-pad', style: { boxShadow: 'none', background: '#fbfaf7' } },
@@ -478,9 +478,9 @@ function tplSlot(t, label, kind, style, saveKakao, remove) {
   }, 300);
   const id = h('input', { class: 'input', value: t.templateId, placeholder: 'KA01TP…', oninput: () => { t.templateId = id.value.trim(); saveKakao(); } });
   const ta = h('textarea', { class: 'input', rows: 8, value: t.text, placeholder: '카카오에서 승인받은 문구를 그대로 붙여 넣으세요', oninput: () => { t.text = ta.value; saveKakao(); runCheck(); } });
-  const photoUrl = `${location.origin}/g/#{사진코드}`;
+  const photoUrl = kind === 'growth' ? `${location.origin}/r/#{리포트코드}` : `${location.origin}/g/#{사진코드}`;
   const btn = h('input', { class: 'input', value: t.buttonUrl || '', placeholder: photoUrl, oninput: () => { t.buttonUrl = btn.value.trim(); saveKakao(); runCheck(); } });
-  const btnHelp = h('div', { class: 'tiny muted' }, '사진 보기 버튼을 넣었다면, 솔라피 템플릿 버튼에 적은 링크 주소를 그대로 적어 주세요. 예: ', h('code', null, photoUrl), ' ',
+  const btnHelp = h('div', { class: 'tiny muted' }, kind === 'growth' ? '솔라피 템플릿의 "리포트 보기" 버튼 링크 주소를 그대로 적어 주세요. 예: ' : '사진 보기 버튼을 넣었다면, 솔라피 템플릿 버튼에 적은 링크 주소를 그대로 적어 주세요. 예: ', h('code', null, photoUrl), ' ',
     h('button', { class: 'btn small ghost', onclick: () => { btn.value = photoUrl; btn.dispatchEvent(new Event('input')); } }, '이 주소 넣기'));
   const approved = style === 'cushion' ? h('label', { class: 'check small' }, h('input', { type: 'checkbox', checked: t.approved !== false, onchange: (e) => { t.approved = e.target.checked; saveKakao(); } }), '승인 완료 (체크 안 하면 기본형으로 나가요)') : null;
   runCheck();
@@ -529,6 +529,70 @@ function secAtt() {
     h('div', { class: 'stack mt' }, sw('arrive', '등원(출석) 알림'), sw('late', '지각 알림'), sw('absent', '결석 알림')),
     h('div', { class: 'note small mt' }, h('b', null, '지각 알림: '), '발송 방식에 "지각 즉시 알림" 템플릿을 넣으면, 반의 수업 시간과 선생님이 "지각"을 누른 시각으로 수업 시작·등원 시각·지각 분을 채워서 보내요. 학생이 도착했을 때 "지각"을 눌러 주세요. 반 수업 시간은 "16:00"처럼 적어 두세요.'),
     h('div', { class: 'mt' }, field('알림 문구', ta, '{학원} {학생명} {날짜} {출석} 칸을 쓸 수 있어요')));
+}
+
+// ───────── 학습 평가 항목 ─────────
+function secEvalItems() {
+  const e = A.settings.eval = { items: [], byClass: {}, ...A.settings.eval };
+  const save = () => setSetting('eval', { items: e.items, byClass: e.byClass });
+  const box = h('div');
+  let cls = '';
+  function draw() {
+    const use = cls ? new Set(e.byClass[cls] || []) : null;
+    const row = (it) => {
+      const name = h('input', { class: 'input', value: it.name, style: { flex: 1, minWidth: '120px' }, oninput: () => { it.name = name.value; save(); } });
+      if (cls) {
+        const on = !use.size || use.has(it.id);
+        return h('label', { class: 'check', style: { display: 'flex', gap: '8px', padding: '4px 0' } },
+          h('input', { type: 'checkbox', checked: on, onchange: (ev) => {
+            let ids = use.size ? [...use] : e.items.map((x) => x.id);
+            ids = ev.target.checked ? [...new Set([...ids, it.id])] : ids.filter((x) => x !== it.id);
+            if (ids.length === e.items.length) delete e.byClass[cls]; else e.byClass[cls] = ids;
+            save(); draw();
+          } }), it.name);
+      }
+      return h('div', { class: 'row nowrap', style: { padding: '3px 0' } }, name,
+        h('select', { class: 'input', style: { width: 'auto' }, onchange: (ev) => { it.group = ev.target.value; save(); } },
+          h('option', { value: 'area', selected: it.group !== 'attitude' }, '영역'), h('option', { value: 'attitude', selected: it.group === 'attitude' }, '태도')),
+        h('button', { class: 'icon-btn', 'aria-label': '항목 지우기', onclick: async () => {
+          if (!(await confirmBox('항목을 지울까요?', `"${it.name}" 항목을 지워요. 이미 저장된 평가 기록은 남지만 리포트에서는 빠져요.`, '지우기', true))) return;
+          e.items = e.items.filter((x) => x !== it); for (const k of Object.keys(e.byClass)) e.byClass[k] = e.byClass[k].filter((x) => x !== it.id); save(); draw();
+        } }, icon('trash')));
+    };
+    const groups = [['area', '영역별 학습'], ['attitude', '학습 태도']];
+    box.replaceChildren(
+      h('div', { class: 'row' }, h('span', { class: 'small' }, '보기'),
+        h('select', { class: 'input', style: { width: 'auto' }, onchange: (ev) => { cls = ev.target.value; draw(); } },
+          h('option', { value: '' }, '전체 항목 (이름 고치기·추가·삭제)'), ...A.classes.map((c) => h('option', { value: String(c.id), selected: cls === String(c.id) }, `${c.name} 반에서 쓸 항목`)))),
+      cls ? h('div', { class: 'tiny muted mt-s' }, '체크한 항목만 이 반의 학습 평가 화면에 나와요. 모두 체크하면 전체 항목을 써요.') : null,
+      ...groups.map(([g, label]) => h('div', { class: 'mt' }, h('div', { class: 'small', style: { fontWeight: 650 } }, label), ...e.items.filter((x) => (x.group === 'attitude' ? 'attitude' : 'area') === g).map(row))),
+      cls ? null : h('button', { class: 'btn small mt', onclick: () => { e.items.push({ id: 'n' + Date.now().toString(36), name: '새 항목', group: 'area' }); save(); draw(); } }, icon('plus'), '항목 추가'));
+  }
+  draw();
+  return section('evalitems', '학습 평가 항목',
+    h('div', { class: 'note small' }, '선생님이 "학습 평가" 화면에서 누르는 항목이에요. 8가지 버튼(매우 잘함 ~ 진도 보류)은 고정이고, 항목은 자유롭게 바꿀 수 있어요.'), box);
+}
+
+// ───────── 주간 성장 리포트 ─────────
+function secGrowth() {
+  const g = A.settings.growth = { on: true, day: 6, gen: '07:00', send: '12:00', auto: true, model: '@cf/google/gemma-4-26b-a4b-it', per_tick: 4, brand: 'PAMUS ENGLISH', ...A.settings.growth };
+  const save = () => { setSetting('growth', { ...g }); S.meta.growth = { ...g }; };
+  const sw = (key, label) => h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: !!g[key], onchange: (ev) => { g[key] = ev.target.checked; save(); } }), label);
+  const time = (key) => h('input', { class: 'input', type: 'time', value: g[key], step: 600, onchange: (ev) => { g[key] = ev.target.value; save(); } });
+  const MODELS = [['@cf/google/gemma-4-26b-a4b-it', 'Gemma 4 26B (추천 · 무료 사용량 안에서 가장 많이)'], ['@cf/meta/llama-3.3-70b-instruct-fp8-fast', 'Llama 3.3 70B (무료 사용량을 빨리 씀)'], ['@cf/qwen/qwen3-30b-a3b-fp8', 'Qwen3 30B']];
+  return section('growth', '주간 성장 리포트 (AI)',
+    A.ai ? h('div', { class: 'note ok small' }, 'Cloudflare Workers AI가 연결되어 있어요. 무료 사용량(하루 1만 뉴런) 안에서 써요.')
+      : h('div', { class: 'note warn small' }, 'Workers AI가 아직 연결되지 않았어요. 새 버전이 배포되면 자동으로 연결돼요. 그 전까지는 AI 없이 기록만으로 정리하고 "AI 미사용"으로 표시해요.'),
+    h('div', { class: 'stack mt' }, h('div', null, sw('on', '매주 성장 리포트 만들기')), h('div', null, sw('auto', '발송 시간에 "승인된" 리포트만 자동 발송'))),
+    h('div', { class: 'grid2 mt' },
+      field('만드는 요일', h('select', { class: 'input', onchange: (ev) => { g.day = Number(ev.target.value); save(); } }, [6, 0, 5].map((d) => h('option', { value: d, selected: Number(g.day) === d }, `${DOW_KO[d]}요일`))), '월~금 기록을 모아요'),
+      field('AI가 쓰기 시작하는 시간', time('gen'), '10분마다 몇 명씩 써요'),
+      field('승인된 리포트 발송 시간', time('send'), '승인(체크)한 리포트만 나가요'),
+      field('리포트 맨 위 영문 이름', h('input', { class: 'input', value: g.brand, oninput: (ev) => { g.brand = ev.target.value; save(); } }))),
+    h('div', { class: 'grid2 mt' },
+      field('AI 모델', h('select', { class: 'input', onchange: (ev) => { g.model = ev.target.value; save(); } }, MODELS.map(([v, l]) => h('option', { value: v, selected: g.model === v }, l)))),
+      field('10분마다 쓰는 학생 수', h('input', { class: 'input', type: 'number', min: 1, max: 10, value: g.per_tick, oninput: (ev) => { g.per_tick = Number(ev.target.value) || 4; save(); } }), '무료 사용량을 넘으면 그날은 기록만으로 정리돼요')),
+    h('div', { class: 'note small mt' }, '학부모님께는 알림톡으로 요약과 "리포트 보기" 버튼이 가요. 발송 방식에서 "주간 성장 리포트" 템플릿을 등록하고, 버튼 링크 주소에 ', h('code', null, `${location.origin}/r/#{리포트코드}`), '를 넣어 주세요.'));
 }
 
 // ───────── 사진·영상 ─────────

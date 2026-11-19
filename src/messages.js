@@ -6,6 +6,7 @@ import { buildDay } from './context.js';
 import { oneLine } from './progress.js';
 import { renderTemplate, kakaoVariables, kakaoFieldText } from './render.js';
 import { sendBatch, kakaoOnly } from './solapi.js';
+import { ensureReports, growthVars, weekOf } from './growth.js';
 
 export const ATT_LABEL = { present: '출석', late: '지각', absent: '결석' };
 export const HW_LABEL = { done: '완료', partial: '미흡', missing: '미제출' };
@@ -276,6 +277,18 @@ export async function generate(env, kind, ref, opts = {}) {
     }
   } else if (kind === 'hw5') {
     items.push(...await hw5Items(env, settings, ref));
+  } else if (kind === 'growth') {
+    // 주간 성장 리포트: 리포트(AI 문장)가 준비된 학생만 보낼 수 있고, 처음엔 모두 "승인 전"(체크 해제)
+    ref = weekOf(ref).ref;
+    await ensureReports(env, settings, ref);
+    const url = baseUrl(settings, env);
+    const reps = await all(env, `SELECT r.*, s.name, s.phone, s.class_id, s.code, s.msg_style FROM reports r JOIN students s ON s.id = r.student_id
+      WHERE r.kind = 'weekly' AND r.ref = ? AND s.deleted = 0`, ref);
+    for (const r of reps) {
+      let facts = {}; try { facts = JSON.parse(r.facts || '{}'); } catch { /* */ }
+      const locked = r.status === 'ready' ? '' : 'AI 작성 중';
+      items.push({ student: { id: r.student_id, class_id: r.class_id }, vars: growthVars(settings, url, r, facts), locked, checked: 0 });
+    }
   } else {
     const list = await periodVars(env, settings, kind, ref);
     // 주간·월간은 "직접 골라서 보내기"가 기본 → 처음엔 모두 체크 해제 (자동 발송을 켠 경우만 체크)
