@@ -340,6 +340,8 @@ const ALIAS = {
   집계기간: '집계기간', 숙제내역: '숙제내역', 확인내역: '숙제내역', 누적횟수: '누적횟수',
   리포트코드: '리포트코드', 리포트링크: '리포트링크', 리포트: '리포트링크',
 };
+/** 앱이 채울 수 있는 알림톡 칸 이름 전부 */
+export const KAKAO_FIELD_NAMES = Object.keys(ALIAS);
 export function aliasOf(name) {
   const key = String(name).replace(/\s+/g, '');
   return ALIAS[key] || null;
