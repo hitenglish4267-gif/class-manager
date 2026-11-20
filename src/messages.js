@@ -350,12 +350,18 @@ function chooseKakao(settings, kind, style) {
   return tpl ? { pfId: k.pfId, ...tpl } : null;
 }
 
+/** 성장 리포트 버튼 주소의 #{리포트코드}는 "버튼 링크 주소" 칸을 비워 둬도 항상 넘기기 */
+function withButtonVars(kind, variables, vars) {
+  if (kind === 'growth' && vars && vars.리포트코드 && !variables['#{리포트코드}']) return { ...variables, '#{리포트코드}': vars.리포트코드 };
+  return variables;
+}
+
 export function buildSendItem(settings, kind, key, to, text, vars, studentStyle) {
   const style = studentStyle || settings.kakao.style || 'basic';
   const tpl = chooseKakao(settings, kind, style);
   return {
     key, to, text,
-    kakao: tpl ? { pfId: tpl.pfId, templateId: tpl.templateId, variables: kakaoVariables(kakaoFieldText(tpl), vars) } : null,
+    kakao: tpl ? { pfId: tpl.pfId, templateId: tpl.templateId, variables: withButtonVars(kind, kakaoVariables(kakaoFieldText(tpl), vars), vars) } : null,
     style: tpl ? tpl.style : 'sms',
   };
 }
