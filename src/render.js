@@ -1,6 +1,6 @@
 // 문구 틀 채우기: {학생명} 같은 칸을 실제 값으로 바꾸고, 내용이 빈 줄은 빼기
 
-import { aliasOf } from './defaults.js';
+import { aliasOf, KAKAO_FIELD_NAMES } from './defaults.js';
 
 function lookup(vars, name) {
   const key = String(name).replace(/\s+/g, '');
@@ -48,6 +48,13 @@ export function kakaoFieldText(t) {
 /** 알림톡 변수 객체 만들기 (빈 값은 '-') */
 export function kakaoVariables(text, vars) {
   const out = {};
+  // 앱에 붙여 넣은 문구가 실제 승인 문구와 조금 달라도 칸이 비지 않게, 앱이 아는 칸 이름은 모두 함께 보내요
+  // (템플릿에 없는 칸은 솔라피가 무시해요)
+  for (const name of KAKAO_FIELD_NAMES) {
+    const r = lookup(vars, name);
+    const v = r.known && r.value != null ? String(r.value).trim() : '';
+    if (v) out[`#{${name}}`] = v;
+  }
   for (const name of kakaoFields(text)) {
     const r = lookup(vars, name);
     let v = r.known && r.value != null ? String(r.value).trim() : '';
