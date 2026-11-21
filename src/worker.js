@@ -7,7 +7,7 @@ import { handleApi } from './api.js';
 import { serveMedia, galleryPage, cleanupMedia } from './media.js';
 import { generate, sendMessages } from './messages.js';
 import { buildDay } from './context.js';
-import { reportPage, processQueue, growthSettings, weekOf } from './growth.js';
+import { reportPage, processQueue, growthSettings, periodFor } from './growth.js';
 
 function versionOf(env) {
   const id = env.CF_VERSION_METADATA && env.CF_VERSION_METADATA.id;
@@ -126,14 +126,16 @@ export async function runSchedule(env, nowMs = Date.now()) {
 
   // 주간 성장 리포트: 정한 요일·시간에 만들기 시작 → 10분마다 몇 명씩 AI로 쓰기 → 발송 시간에 "승인된" 것만 보내기
   const g = growthSettings(settings);
-  if (g.on && now.dow === Number(g.day) && mins >= hmToMin(g.gen) && await claimJob(env, 'growth-gen', now.date)) {
+  // 2주마다면 기준 토요일과 짝이 맞는 날에만 (periodFor가 오늘을 기준일로 돌려줄 때)
+  const isGrowthDay = g.on && now.dow === Number(g.day) && periodFor(settings, now.date).ref === now.date;
+  if (isGrowthDay && mins >= hmToMin(g.gen) && await claimJob(env, 'growth-gen', now.date)) {
     await generate(env, 'growth', now.date, { settings });
   }
   const refs = await processQueue(env, { settings });
   for (const ref of refs) await generate(env, 'growth', ref, { settings });
   const gdiff = mins - hmToMin(g.send);
-  if (g.on && g.auto && now.dow === Number(g.day) && gdiff >= 0 && gdiff < 120 && await claimJob(env, 'growth-send', now.date)) {
-    await sendMessages(env, await idsToSend(env, 'growth', weekOf(now.date).ref), { auto: true });
+  if (isGrowthDay && g.auto && gdiff >= 0 && gdiff < 120 && await claimJob(env, 'growth-send', now.date)) {
+    await sendMessages(env, await idsToSend(env, 'growth', now.date), { auto: true });
   }
 
   if (await claimJob(env, 'cleanup', now.date)) {

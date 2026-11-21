@@ -9,7 +9,7 @@ import { oauthStatus, getAccessToken } from './solapi-oauth.js';
 import { renderTemplate, checkKakaoFields, kakaoVariables, kakaoFieldText } from './render.js';
 import { RECOMMENDED_KAKAO, DEFAULT_SMS, KIND_LABELS, CUSHION_LABELS, BASIC_ONLY_KINDS } from './defaults.js';
 import { mediaStart, mediaPart, mediaComplete, mediaDelete, mediaList, r2Ready } from './media.js';
-import { evalDay, saveEvalMarks, saveDayNote, saveEvalDayItems, processQueue, contentOf, cleanContent, ruleWrite, reportHtml, reportText, growthSettings, weekOf, NOTE_FIELDS, EVAL_MARKS } from './growth.js';
+import { evalDay, saveEvalMarks, saveDayNote, saveEvalDayItems, processQueue, contentOf, cleanContent, ruleWrite, reportHtml, reportText, growthSettings, periodFor, NOTE_FIELDS, EVAL_MARKS } from './growth.js';
 
 const SESSION_DAYS = 60;
 
@@ -259,7 +259,7 @@ async function homework(env, me, url) {
 async function listMessages(env, me, url) {
   const kind = url.searchParams.get('kind') || 'daily';
   let ref = url.searchParams.get('ref') || kstNow().date;
-  if (kind === 'growth') ref = weekOf(ref).ref;
+  if (kind === 'growth') ref = periodFor(await getSettings(env), ref).ref;
   const exists = await first(env, 'SELECT id FROM messages WHERE kind = ? AND ref = ? LIMIT 1', kind, ref);
   if (exists) await generate(env, kind, ref); // 열 때마다 가장 최근 수업 기록으로 다시 맞추기
   const vis = await visibleStudentIds(env, me);
@@ -347,7 +347,7 @@ async function reportRegenerate(env, me, body) {
   return { ok: true };
 }
 async function reportProcess(env, body) {
-  const ref = weekOf(String(body.ref || kstNow().date)).ref;
+  const ref = periodFor(await getSettings(env), String(body.ref || kstNow().date)).ref;
   await generate(env, 'growth', ref);
   const done = await processQueue(env, { limit: 2 });
   if (done.length) await generate(env, 'growth', ref);
@@ -441,8 +441,9 @@ async function saveSetting(env, body) {
   if (body.key === 'growth') {
     const hm = (v, d) => (/^\d{2}:\d{2}$/.test(String(v)) ? String(v) : d);
     value = { on: value.on !== false, day: Math.min(6, Math.max(0, Number(value.day ?? 6))), gen: hm(value.gen, '07:00'), send: hm(value.send, '12:00'),
-      auto: value.auto !== false, model: String(value.model || '@cf/google/gemma-4-26b-a4b-it').slice(0, 80), per_tick: Math.min(10, Math.max(1, Number(value.per_tick) || 4)),
-      brand: String(value.brand || 'PAMUS ENGLISH').slice(0, 40) };
+      auto: value.auto !== false, model: String(value.model || '@cf/google/gemma-4-26b-a4b-it').slice(0, 80), per_tick: Math.min(10, Math.max(1, Number(value.per_tick) || 3)),
+      brand: String(value.brand || 'PAMUS ENGLISH').slice(0, 40), weeks: Number(value.weeks) === 1 ? 1 : 2,
+      anchor: /^\d{4}-\d{2}-\d{2}$/.test(String(value.anchor)) ? String(value.anchor) : '2026-11-21' };
   }
   if (body.key === 'kakao') {
     value = { pfId: String(value.pfId || '').trim(), style: value.style === 'cushion' ? 'cushion' : 'basic',
