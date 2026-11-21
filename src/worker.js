@@ -7,7 +7,8 @@ import { handleApi } from './api.js';
 import { serveMedia, galleryPage, cleanupMedia } from './media.js';
 import { generate, sendMessages } from './messages.js';
 import { buildDay } from './context.js';
-import { reportPage, processQueue, growthSettings, periodFor } from './growth.js';
+import { reportPage, reportWorkImage, processQueue, growthSettings, periodFor } from './growth.js';
+import { processWorks, cleanupWorks } from './works.js';
 
 function versionOf(env) {
   const id = env.CF_VERSION_METADATA && env.CF_VERSION_METADATA.id;
@@ -25,6 +26,7 @@ export default {
       if ((m = url.pathname.match(/^\/m\/([A-Za-z0-9]+)$/))) return await serveMedia(env, ctx, m[1], request);
       if ((m = url.pathname.match(/^\/g\/([A-Za-z0-9]+)$/))) return await galleryPage(env, m[1]);
       if ((m = url.pathname.match(/^\/r\/([A-Za-z0-9]+)$/))) return await reportPage(env, request, m[1]);
+      if ((m = url.pathname.match(/^\/r\/([A-Za-z0-9]+)\/w\/([A-Za-z0-9]+)$/))) return await reportWorkImage(env, request, m[1], m[2]);
       if (url.pathname === '/' || url.pathname === '/index.html') {
         // 화면 파일에 버전 번호를 넣어서, 새로 배포하면 휴대폰에 옛날 화면이 남지 않게
               const res = await env.ASSETS.fetch(new URL('/', url));
@@ -131,6 +133,8 @@ export async function runSchedule(env, nowMs = Date.now()) {
   if (isGrowthDay && mins >= hmToMin(g.gen) && await claimJob(env, 'growth-gen', now.date)) {
     await generate(env, 'growth', now.date, { settings });
   }
+  // 올린 학습 결과물 사진: AI 코멘트가 아직 없는 것 몇 장씩
+  try { await processWorks(env, 3); } catch (e) { console.error('works', e); }
   const refs = await processQueue(env, { settings });
   for (const ref of refs) await generate(env, 'growth', ref, { settings });
   const gdiff = mins - hmToMin(g.send);
@@ -140,6 +144,7 @@ export async function runSchedule(env, nowMs = Date.now()) {
 
   if (await claimJob(env, 'cleanup', now.date)) {
     await cleanupMedia(env);
+    await cleanupWorks(env);
     await run(env, 'DELETE FROM sessions WHERE expires < ?', nowMs);
   }
 }

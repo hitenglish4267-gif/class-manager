@@ -8,6 +8,7 @@ import { solapiStatus, solapiBalance, sendBatch, authMode, kakaoOnly } from './s
 import { oauthStatus, getAccessToken } from './solapi-oauth.js';
 import { renderTemplate, checkKakaoFields, kakaoVariables, kakaoFieldText } from './render.js';
 import { RECOMMENDED_KAKAO, DEFAULT_SMS, KIND_LABELS, CUSHION_LABELS, BASIC_ONLY_KINDS } from './defaults.js';
+import { worksList, workRow, workUpload, workUpdate, workDelete, workImage, workAnalyze, worksForReport, WORK_TYPES } from './works.js';
 import { mediaStart, mediaPart, mediaComplete, mediaDelete, mediaList, r2Ready } from './media.js';
 import { evalDay, saveEvalMarks, saveDayNote, saveEvalDayItems, processQueue, contentOf, cleanContent, ruleWrite, reportHtml, reportText, growthSettings, periodFor, polishComment, NOTE_FIELDS, EVAL_MARKS } from './growth.js';
 
@@ -326,11 +327,12 @@ async function reportGet(env, me, url) {
   const settings = await getSettings(env);
   const facts = JSON.parse(r.facts || '{}');
   const c = contentOf(r) || cleanContent(ruleWrite(facts));
+  const works = facts.period ? await worksForReport(env, r.student_id, facts.period.from, facts.period.to) : [];
   const base = String(settings.base_url || '').replace(/\/+$/, '');
   return {
     id: r.id, student: r.student_name, ref: r.ref, status: r.status, source: r.source, model: r.model, error: r.error, edited: !!r.edited,
     viewed_at: r.viewed_at, link: base ? `${base}/r/${r.token}` : `/r/${r.token}`, content: c,
-    text: reportText(settings, facts, c), html: reportHtml(settings, r, facts, c, { noTools: true }),
+    text: reportText(settings, facts, c), html: reportHtml(settings, r, facts, c, { noTools: true, works, workSrc: (w) => `/api/works/${w.id}/img` }),
   };
 }
 async function reportEdit(env, me, body) {
@@ -749,6 +751,20 @@ export async function handleApi(request, env, ctx, url, version) {
       if (!text) throw bad('코멘트를 먼저 적어 주세요');
       return { text: await polishComment(env, await getSettings(env), JSON.parse(r.facts || '{}'), text) };
     },
+    'GET /api/works': async () => {
+      const s = await assertStudent(env, me, url.searchParams.get('student_id'));
+      const settings = await getSettings(env);
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(String(url.searchParams.get('date'))) ? url.searchParams.get('date') : kstNow().date;
+      const p = periodFor(settings, date);
+      return { list: await worksList(env, s.id, p.from, p.to), period: p, types: WORK_TYPES };
+    },
+    'POST /api/works/update': async () => { const w = await workRow(env, body.id); await assertStudent(env, me, w.student_id); return { work: await workUpdate(env, w, body) }; },
+    'POST /api/works/analyze': async () => {
+      const w = await workRow(env, body.id); const s = await assertStudent(env, me, w.student_id);
+      const info = await first(env, 'SELECT s.name AS student, c.name AS class_name FROM students s LEFT JOIN classes c ON c.id = s.class_id WHERE s.id = ?', s.id);
+      return { work: await workAnalyze(env, w, info || {}) };
+    },
+    'POST /api/works/delete': async () => { const w = await workRow(env, body.id); await assertStudent(env, me, w.student_id); return workDelete(env, w); },
     'GET /api/today': () => today(env, me, url),
     'POST /api/attendance': () => saveAttendance(env, me, body, ctx),
     'POST /api/attendance/all': () => attendanceAll(env, me, body, ctx),
@@ -797,6 +813,14 @@ export async function handleApi(request, env, ctx, url, version) {
   if (path === '/api/export.csv') return exportCsv(env, me, url);
 
   let m;
+  if (path === '/api/works/upload' && method === 'POST') {
+    await assertStudent(env, me, url.searchParams.get('student_id'));
+    return json({ work: await workUpload(env, me, url, request) });
+  }
+  if ((m = path.match(/^\/api\/works\/(\d+)\/img$/)) && method === 'GET') {
+    const w = await workRow(env, m[1]); await assertStudent(env, me, w.student_id);
+    return workImage(env, w);
+  }
   if ((m = path.match(/^\/api\/media\/(\d+)\/part$/)) && method === 'PUT') {
     const row = await first(env, 'SELECT student_id FROM media WHERE id = ?', Number(m[1]));
     if (!row) throw bad('업로드 정보를 찾을 수 없어요');

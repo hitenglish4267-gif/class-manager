@@ -346,3 +346,8 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-
 /* ── 성장 리포트 ── */
 .rep-frame { width: 100%; height: 62vh; border: 1px solid var(--line); border-radius: var(--radius-s); background: #f6f4fb; }
 .rep-edit textarea { min-height: 54px; }
+
+/* 학습 결과물 사진 */
+.work-grid { display: grid; grid-template-columns: 120px 1fr; gap: 12px; align-items: start; }
+.work-img { width: 100%; border-radius: 10px; display: block; background: var(--sunken); }
+@media (max-width: 520px) { .work-grid { grid-template-columns: 1fr; } .work-img { max-height: 260px; object-fit: contain; } }

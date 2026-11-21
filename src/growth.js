@@ -4,6 +4,7 @@
 // - AI를 쓸 수 없을 때는 기록만으로 규칙에 따라 쓰고 "자동 정리"라고 표시해요 (AI가 쓴 척하지 않기)
 // 점수·진도·출결 같은 사실은 AI가 아니라 기록에서 바로 넣어요. AI는 문장만 써요.
 
+import { worksForReport, typeLabel } from './works.js';
 import { all, first, run, getSettings } from './db.js';
 import { addDays, dateShort, dowOf, kstNow, randomToken } from './util.js';
 import { oneLine } from './progress.js';
@@ -78,16 +79,17 @@ const pct = (c, t) => (t ? Math.round((c / t) * 100) : null);
 const fmt = (n) => (n == null || n === '' ? '' : String(+Number(n).toFixed(1)));
 
 async function rangeData(env, from, to) {
-  const [days, tests, evals, notes, logs, media] = await Promise.all([
+  const [days, tests, evals, notes, logs, media, works] = await Promise.all([
     all(env, 'SELECT * FROM days WHERE date >= ? AND date <= ? ORDER BY date', from, to),
     all(env, 'SELECT * FROM tests WHERE date >= ? AND date <= ? ORDER BY date, kind', from, to),
     all(env, 'SELECT * FROM evals WHERE date >= ? AND date <= ? ORDER BY date', from, to),
     all(env, 'SELECT * FROM daynotes WHERE date >= ? AND date <= ? ORDER BY date', from, to),
     all(env, 'SELECT * FROM logs WHERE date >= ? AND date <= ? ORDER BY date', from, to),
     all(env, "SELECT student_id, token, kind, date FROM media WHERE date >= ? AND date <= ? AND status = 'ready' ORDER BY date, id", from, to),
+    all(env, "SELECT student_id, date, type, comment FROM works WHERE date >= ? AND date <= ? AND include = 1 AND comment != '' ORDER BY date, id", from, to).catch(() => []),
   ]);
   const by = (rows, key = 'student_id') => { const m = new Map(); for (const r of rows) { if (!m.has(r[key])) m.set(r[key], []); m.get(r[key]).push(r); } return m; };
-  return { days: by(days), tests: by(tests), evals: by(evals), notes: by(notes), media: by(media), logs: new Map(logs.map((l) => [`${l.date}|${l.target}`, l])) };
+  return { days: by(days), tests: by(tests), evals: by(evals), notes: by(notes), media: by(media), works: by(works), logs: new Map(logs.map((l) => [`${l.date}|${l.target}`, l])) };
 }
 
 function evalSummary(rows, itemName) {
@@ -183,7 +185,7 @@ export function buildFacts(settings, s, cur, prev, period) {
   // 같은 실수가 여러 날 반복되면 표시
   const mistakes = pick('mistakes');
   const prevNotes = prev.notes.get(s.id) || [];
-  const media = (cur.media.get(s.id) || []).filter((m) => m.kind === 'image').slice(0, 6).map((m) => m.token);
+  const media = (cur.media.get(s.id) || []).filter((m) => m.kind === 'photo').slice(0, 6).map((m) => m.token);
 
   return {
     student: s.name, class_name: s.class_name || '', teacher: s.teacher_name || '',
@@ -201,12 +203,13 @@ export function buildFacts(settings, s, cur, prev, period) {
     notes: { mistakes, weak: pick('weak'), extra_done: pick('extra_done'), extra_need: pick('extra_need'), special: pick('special'), comments },
     prev_notes: { mistakes: prevNotes.filter((n) => n.mistakes).map((n) => String(n.mistakes).trim()), extra_need: prevNotes.filter((n) => n.extra_need).map((n) => String(n.extra_need).trim()) },
     media,
+    works: ((cur.works && cur.works.get(s.id)) || []).map((w) => ({ date: w.date, type: typeLabel(w.type), comment: String(w.comment).trim() })),
   };
 }
 
 function hasData(f) {
   return f.progress.length || f.tests.length || f.areas.length || f.attendance.present + f.attendance.late + f.attendance.absent
-    || Object.values(f.notes).some((a) => a.length);
+    || Object.values(f.notes).some((a) => a.length) || (f.works || []).length;
 }
 
 /** 리포트 행을 만들거나 사실만 최신으로 (AI 문장은 그대로) */
@@ -350,6 +353,7 @@ export function briefFor(f) {
   notesOut('추가 지도가 필요한 내용', n.extra_need);
   notesOut('수업 중 선생님 한마디', n.comments);
   notesOut('선생님 특별 코멘트 (teacher_comment에 우선 반영)', n.special);
+  if (f.works?.length) { add('학습 결과물 사진에 대한 선생님 확인 코멘트 (라이팅·교재 등 실제 결과물 근거 — strengths·practice·growth에 활용):'); for (const x of f.works) add(`- ${dateShort(x.date)} ${x.type}: ${x.comment}`); }
   if (f.prev_notes?.mistakes?.length) add(`${prevWord(w)} 기록된 실수: ${f.prev_notes.mistakes.join(' / ')} (이번 기간에 같은 실수가 줄었는지 비교)`);
   if (f.prev_notes?.extra_need?.length) add(`${prevWord(w)} 보강이 필요했던 내용: ${f.prev_notes.extra_need.join(' / ')} (보강 후 나아졌는지 비교)`);
   return L.join('\n');
@@ -559,6 +563,7 @@ export function reportText(settings, facts, c) {
   sec(`다음 ${W === 2 ? '2주' : '주'} 학습 예정`, c.next_week);
   sec('가정에서 도와주시면 좋은 부분', c.home_tips);
   sec('선생님 코멘트', c.teacher_comment);
+  sec('학습 결과물', (facts.works || []).map((w) => `${dateShort(w.date)} ${w.type}: ${w.comment}`));
   return L.join('\n\n');
 }
 
@@ -647,6 +652,8 @@ export function reportHtml(settings, r, facts, c, opts = {}) {
   const ach = `${p(c.overview)}${homeworkChart(facts.homework, W)}${areas}<div class="chips">${hw.rate != null ? `<span class="chip">숙제 완료율 ${hw.rate}%${hw.prev_rate != null ? ` <small>(${prevWord(W)} ${hw.prev_rate}%)</small>` : ''}</span>` : ''}${facts.progress_rate != null ? `<span class="chip">계획 진도 달성 ${facts.progress_rate}%</span>` : ''}</div>`;
   const academy = `${c.academy_done.length ? `<h3>이번 기간 학원에서 지도한 내용</h3>${ul(c.academy_done)}` : ''}${c.academy_plan.length ? `<h3>앞으로 지도할 계획</h3>${ul(c.academy_plan)}` : ''}`;
   const photos = (facts.media || []).length ? `<div class="photos">${facts.media.map((t) => `<img src="/m/${esc(t)}" loading="lazy" alt="">`).join('')}</div>` : '';
+  const wsrc = opts.workSrc || ((w) => `/r/${esc(r.token)}/w/${esc(w.token)}`);
+  const works = (opts.works || []).length ? `<div class="works">${opts.works.map((w) => `<figure class="work"><a href="${wsrc(w)}" target="_blank" rel="noopener"><img src="${wsrc(w)}" loading="lazy" alt="${esc(typeLabel(w.type))}"></a><figcaption><div class="wt">${esc(dateShort(w.date))} · ${esc(typeLabel(w.type))}</div>${w.comment ? `<p>${esc(w.comment)}</p>` : ''}</figcaption></figure>`).join('')}</div>` : '';
   const badge = r.source === 'rule' ? '<div class="note">이번 리포트는 AI 없이 수업 기록만으로 정리했어요.</div>' : '';
   const body = [
     sec('학생 이름 및 학습 기간', head),
@@ -661,7 +668,7 @@ export function reportHtml(settings, r, facts, c, opts = {}) {
     sec(`다음 ${W === 2 ? '2주' : '주'} 학습 예정 내용`, p(c.next_week) || p(facts.next_plan ? `다음에는 ${facts.next_plan}을(를) 학습할 예정이에요.` : '')),
     sec('가정에서 함께 도와주시면 좋은 부분', ul(c.home_tips)),
     sec('선생님의 특별 코멘트', p(c.teacher_comment), 'note-sec'),
-    sec('학습 결과물 및 활동 사진', photos),
+    sec('학습 결과물 및 활동 사진', works + photos),
   ].join('');
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
 <title>${esc(facts.student)} 주간 성장 리포트</title>
@@ -682,7 +689,10 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.chip{background:#f3f1fa;border-radius:999px;padding:4px 10px;font-size:13px}.up{color:#2f8f5b}.down{color:#c4613b}
 .areas{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:10px}.area{border:1px solid #efecf6;border-radius:12px;padding:8px 10px}.an{font-weight:600;font-size:14px;margin-bottom:4px}
 .mk{display:inline-block;border-radius:8px;padding:2px 8px;font-size:12px;margin:2px 4px 2px 0}.tr{font-size:11px;font-weight:600}
-.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}.photos img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px;background:#eee}
+.works{display:grid;gap:12px}.work{margin:0;display:grid;grid-template-columns:minmax(110px,38%) 1fr;gap:12px;align-items:start;border:1px solid #efecf6;border-radius:14px;padding:10px;background:#fcfbff}
+.work img{width:100%;border-radius:10px;background:#eee;display:block}.work .wt{font-size:12px;font-weight:700;color:#5b6bb5;margin-bottom:2px}.work p{font-size:14px;margin:4px 0 0}
+@media (max-width:480px){.work{grid-template-columns:1fr}}
+.photos{margin-top:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}.photos img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px;background:#eee}
 .note{background:#fff8e6;border-radius:10px;padding:8px 12px;font-size:13px;color:#7a6020;margin-bottom:10px}
 .tools{display:flex;gap:8px;justify-content:flex-end;margin-bottom:10px}.tools button{border:1px solid #dcd7ea;background:#fff;border-radius:999px;padding:7px 14px;font:inherit;font-size:13px;cursor:pointer}
 .foot{text-align:center;color:#9a9db0;font-size:12px;margin-top:20px}
@@ -738,8 +748,24 @@ export async function reportPage(env, request, token) {
   if (!r.viewed_at) await run(env, 'UPDATE reports SET viewed_at = ? WHERE id = ?', kstNow().stamp, r.id);
   const facts = JSON.parse(r.facts || '{}');
   const c = contentOf(r) || cleanContent(ruleWrite(facts));
-  return new Response(reportHtml(settings, r, facts, c), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' } });
+  const works = facts.period ? await worksForReport(env, r.student_id, facts.period.from, facts.period.to).catch(() => []) : [];
+  return new Response(reportHtml(settings, r, facts, c, { works }), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' } });
 }
+/** 리포트 속 결과물 사진: 리포트 비밀번호를 통과한 경우에만 */
+export async function reportWorkImage(env, request, token, wtoken) {
+  const r = await first(env, 'SELECT r.id, r.token, r.student_id, r.facts, s.phone FROM reports r LEFT JOIN students s ON s.id = r.student_id WHERE r.token = ?', token);
+  if (!r) return new Response('없음', { status: 404 });
+  const last4 = String(r.phone || '').replace(/\D/g, '').slice(-4);
+  const want = last4 ? await sha(`${token}|${last4}|${env.TOKEN_ENC_KEY || 'cm'}`) : null;
+  if (want && cookieOf(request, `rv_${token.slice(0, 10)}`) !== want) return new Response('리포트 비밀번호를 먼저 입력해 주세요', { status: 403 });
+  const w = await first(env, 'SELECT * FROM works WHERE token = ? AND student_id = ? AND include = 1', wtoken, r.student_id);
+  const p = JSON.parse(r.facts || '{}').period;
+  if (!w || (p && (w.date < p.from || w.date > p.to))) return new Response('없음', { status: 404 });
+  const obj = env.MEDIA ? await env.MEDIA.get(w.r2key) : null;
+  if (!obj) return new Response('없음', { status: 404 });
+  return new Response(obj.body, { headers: { 'content-type': w.mime || 'image/jpeg', 'cache-control': 'private, max-age=86400', 'x-robots-tag': 'noindex' } });
+}
+
 function pinForm(settings, err) {
   return page('리포트 확인', `<div style="font-size:12px;letter-spacing:.16em;color:#5b6bb5;font-weight:700">GROWTH REPORT</div><h2 style="margin:6px 0">${esc(settings.academy || '')}</h2>
   <p>학부모님 휴대폰 번호 <b>뒷자리 4자리</b>를 입력하시면<br>우리 아이 리포트를 보실 수 있어요.</p>
