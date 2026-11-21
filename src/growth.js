@@ -269,6 +269,19 @@ const SYSTEM = `당신은 15년 넘게 초등·중등 아이들을 가르쳐 온
 7. "학원에서 이미 한 지도"(academy_done)와 "앞으로 할 지도"(academy_plan)를 섞지 않습니다.
 8. 선생님 특별 코멘트는 짧은 메모일 수 있습니다. 메모의 뜻과 사실은 그대로 살리되, 학부모님께 드리는 따뜻하고 전문적인 3~4문장으로 풀어 teacher_comment에 씁니다. (예: 메모 "발표 자신감 생김, 단어 실수 줄이기" → 발표할 때 목소리와 표정에서 자신감이 느껴진다는 점, 그것이 어떤 성장인지, 단어 철자 실수를 줄이기 위해 학원에서 어떻게 도울지, 가정에서의 격려 부탁) 메모에 없는 사실(날짜·점수·일화)은 기록 요약에 있을 때만 보탭니다.
 
+[중복 금지 — 매우 중요]
+- 같은 사실·같은 문장을 두 칸 이상에 쓰지 않습니다. 각 사실은 가장 알맞은 한 칸에만 씁니다.
+- 칸마다 쓸 수 있는 근거가 정해져 있습니다. 근거가 없으면 그 칸은 비워 둡니다(빈 칸은 리포트에서 자동으로 숨겨져요).
+  · strengths: '매우 잘함·잘함' 평가, 통과한 시험, 좋은 숙제 기록
+  · growth: '향상 중' 평가, 지난 기간보다 오른 점수·완료율
+  · practice: '반복 연습 필요' 평가, 반복되는 실수·오답 기록
+  · weak_concepts: '개념 확인 필요' 평가, 이해가 부족한 개념 기록
+  · academy_done: "학원에서 이미 한 추가 지도" 기록, '복습 진행' 평가 (진도를 나간 것은 여기에 쓰지 않습니다)
+  · academy_plan: "추가 지도가 필요한 내용", '개별 지도 필요'·'진도 보류' 평가, practice·weak_concepts에 대한 지도 방법
+  · next_week: "다음 학습 예정"과 숙제 계획 (다음 진도·시험 준비 이야기는 이 칸에만)
+  · teacher_comment: 선생님 메모·한마디 (다른 칸 내용을 되풀이하지 않고, 아이에 대한 따뜻한 총평으로)
+- 교재·Unit·Day 이름 같은 긴 표현을 여러 번 반복하지 않습니다.
+
 [문체]
 - 경험 많은 선생님이 직접 쓴 것처럼 따뜻하고 차분한 존댓말("~했어요", "~하고 있어요", "~할 예정이에요").
 - 금지: "열심히 했어요", "잘했어요", "최선을 다하겠습니다", "앞으로도 지켜봐 주세요" 같은 내용 없는 상투어 단독 사용, 이모지, 느낌표, 같은 문장 시작 반복, 형식적인 인사말.
@@ -296,7 +309,8 @@ const POLISH = `당신은 영어학원 원장입니다. 아래 "초안"은 학�
 - 상투어("열심히 했어요", "잘했어요" 단독, "지켜봐 주세요"), 느낌표, 이모지, 반복되는 문장 시작을 고칩니다.
 - 부족한 부분에는 학원의 구체적인 지도 방법·빈도가 함께 있는지 확인하고, 없으면 기록에 맞게 보탭니다.
 - 문장은 따뜻하고 차분한 존댓말로, 경험 많은 선생님이 직접 쓴 것처럼 자연스럽게 다듬습니다.
-- 빈 칸("" 또는 [])은 근거가 없으면 그대로 둡니다.`;
+- 빈 칸("" 또는 [])은 근거가 없으면 그대로 둡니다.
+- 여러 칸에 같은 사실·비슷한 문장이 있으면 가장 알맞은 한 칸에만 남기고 나머지는 지웁니다. 다음 진도·시험 준비 이야기는 next_week에만 둡니다.`;
 
 /** AI에게 줄 기록 요약 (JSON 대신 한국어 문장 — 더 자연스럽고 정확하게 써요) */
 export function briefFor(f) {
@@ -385,7 +399,7 @@ async function aiWrite(env, settings, facts) {
       // 선생님 특별 코멘트가 있는데 AI가 비워 두면 메모 그대로라도 넣기
       const special = (facts.notes?.special || []).map((x) => x.text).filter(Boolean).join(' ');
       if (special && !content.teacher_comment) content.teacher_comment = special;
-      return { content, model };
+      return { content: refineContent(content, facts), model };
     } catch (e) { lastErr = e; }
   }
   throw lastErr || new Error('AI 호출 실패');
@@ -475,9 +489,56 @@ export async function processQueue(env, opts = {}) {
   return [...refs];
 }
 
+// ───────── 반복 문구 걸러내기 · 근거 없는 칸 비우기 ─────────
+const ORDER = ['overview', 'concepts', 'strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'next_week', 'home_tips', 'teacher_comment'];
+const norm = (t) => String(t).replace(/[\s.,·:;'"()\[\]~\-]/g, '').toLowerCase();
+const grams = (t) => { const s = norm(t); const g = new Set(); for (let i = 0; i < s.length - 1; i++) g.add(s.slice(i, i + 2)); return g; };
+const similar = (a, b) => { if (!a.size || !b.size) return 0; let n = 0; for (const x of a) if (b.has(x)) n++; return n / Math.min(a.size, b.size); };
+const sentences = (t) => String(t).split(/(?<=[다요]\.)\s+|(?<=[.?])\s+(?=[가-힣A-Za-z0-9])|\n+/).map((x) => x.trim()).filter(Boolean);
+
+/** 칸마다 근거가 없는 내용을 비우고, 앞 칸과 겹치는 문장을 지워요 (AI가 같은 말을 반복하지 않게) */
+export function refineContent(c, f) {
+  if (!c || !f) return c;
+  const cats = f.categories || {};
+  const n = f.notes || {};
+  const len = (a) => (a || []).length;
+  const tk = f.test_kinds || [];
+  const allowed = {
+    strengths: len(cats.strength) || (f.tests || []).some((t) => t.result === '통과' || (t.pct ?? 0) >= 90) || (f.homework?.rate ?? 0) >= 80,
+    growth: len(cats.growth) || tk.some((k) => (k.change ?? 0) > 0) || ((f.homework?.prev_rate != null) && f.homework.rate > f.homework.prev_rate) || (f.areas || []).some((a) => a.trend === '상승'),
+    practice: len(cats.practice) || len(n.mistakes),
+    weak_concepts: len(cats.concept) || len(n.weak),
+    academy_done: len(n.extra_done) || len(cats.review),
+    academy_plan: len(n.extra_need) || len(cats.individual) || len(cats.hold) || len(cats.practice) || len(cats.concept) || len(n.mistakes) || len(n.weak),
+  };
+  const out = { ...c };
+  for (const [k, ok] of Object.entries(allowed)) if (!ok) out[k] = Array.isArray(out[k]) ? [] : '';
+  // 다음 진도 이야기는 next_week에만
+  const nextKey = norm(f.next_plan || '').slice(0, 12);
+  const seen = [];
+  const keep = (sent, key) => {
+    if (nextKey.length >= 6 && key !== 'next_week' && key !== 'overview' && norm(sent).includes(nextKey)) return false;
+    const g = grams(sent);
+    if (g.size < 4) return true;
+    if (seen.some((s) => similar(g, s) >= 0.6)) return false;
+    seen.push(g);
+    return true;
+  };
+  for (const k of ORDER) {
+    if (Array.isArray(out[k])) {
+      out[k] = out[k].map((item) => sentences(item).filter((s) => keep(s, k)).join(' ')).filter(Boolean);
+    } else if (out[k]) {
+      out[k] = sentences(out[k]).filter((s) => keep(s, k)).join(' ');
+    }
+  }
+  // 선생님 메모가 있는데 코멘트가 비었으면 메모라도
+  if (!out.teacher_comment) out.teacher_comment = (n.special || []).map((x) => x.text).join(' ') || '';
+  return out;
+}
+
 export function contentOf(r) {
   try { if (r.edited) return cleanContent(JSON.parse(r.edited)); } catch { /* */ }
-  try { if (r.ai) return cleanContent(JSON.parse(r.ai)); } catch { /* */ }
+  try { if (r.ai) { const f = JSON.parse(r.facts || 'null'); return refineContent(cleanContent(JSON.parse(r.ai)), f); } } catch { /* */ }
   return null;
 }
 
