@@ -3,6 +3,7 @@
 
 import { h, api, icon, toast, outbox, saveLabel, kstToday, addDays } from './core.js';
 import { S, setDate } from './state.js';
+import { openWorks } from './works.js';
 
 let root;
 let D = null;      // 서버에서 받은 이 반의 하루치
@@ -146,7 +147,9 @@ function studentCard(s) {
     info ? h('div', { class: 'tiny muted mt-s' }, info) : null,
     items.length ? h('div', { class: 'mt-s' }, items.map((i) => markRow(i, (m) => ((D.evals[s.id] || {})[i.id] || []).includes(m), (m) => toggle(s, i.id, m))))
       : h('div', { class: 'tiny muted mt-s' }, '위에서 오늘 수업한 항목을 먼저 골라 주세요.'),
-    h('button', { class: 'btn small ghost mt-s', onclick: () => detail.classList.toggle('hidden') }, filled ? `세부 기록 (${filled})` : '세부 기록 · 특별 코멘트 쓰기'),
+    h('div', { class: 'row mt-s' },
+      h('button', { class: 'btn small ghost', onclick: () => detail.classList.toggle('hidden') }, filled ? `세부 기록 (${filled})` : '세부 기록 · 특별 코멘트 쓰기'),
+      h('button', { class: 'btn small ghost', onclick: () => openWorks(s, S.date) }, icon('cam'), '결과물 사진')),
     detail);
   paintSaveEl(st, s.id);
   return card;
