@@ -271,7 +271,7 @@ const SYSTEM = `당신은 15년 넘게 초등·중등 아이들을 가르쳐 온
 
 [중복 금지 — 매우 중요]
 - 같은 사실·같은 문장을 두 칸 이상에 쓰지 않습니다. 각 사실은 가장 알맞은 한 칸에만 씁니다.
-- 칸마다 쓸 수 있는 근거가 정해져 있습니다. 근거가 없으면 그 칸은 비워 둡니다(빈 칸은 리포트에서 자동으로 숨겨져요).
+- 칸마다 쓸 수 있는 근거가 정해져 있습니다. 근거가 부족하면 짧게 쓰되, 다른 칸의 내용을 가져와 채우지 않습니다.
   · strengths: '매우 잘함·잘함' 평가, 통과한 시험, 좋은 숙제 기록
   · growth: '향상 중' 평가, 지난 기간보다 오른 점수·완료율
   · practice: '반복 연습 필요' 평가, 반복되는 실수·오답 기록
@@ -490,45 +490,31 @@ export async function processQueue(env, opts = {}) {
 }
 
 // ───────── 반복 문구 걸러내기 · 근거 없는 칸 비우기 ─────────
-const ORDER = ['overview', 'concepts', 'strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'next_week', 'home_tips', 'teacher_comment'];
+const ORDER = ['overview', 'next_week', 'concepts', 'strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'home_tips', 'teacher_comment'];
 const norm = (t) => String(t).replace(/[\s.,·:;'"()\[\]~\-]/g, '').toLowerCase();
 const grams = (t) => { const s = norm(t); const g = new Set(); for (let i = 0; i < s.length - 1; i++) g.add(s.slice(i, i + 2)); return g; };
-const similar = (a, b) => { if (!a.size || !b.size) return 0; let n = 0; for (const x of a) if (b.has(x)) n++; return n / Math.min(a.size, b.size); };
+const similar = (a, b) => { if (!a.size || !b.size) return 0; let n = 0; for (const x of a) if (b.has(x)) n++; return n / (a.size + b.size - n); };
 const sentences = (t) => String(t).split(/(?<=[다요]\.)\s+|(?<=[.?])\s+(?=[가-힣A-Za-z0-9])|\n+/).map((x) => x.trim()).filter(Boolean);
 
-/** 칸마다 근거가 없는 내용을 비우고, 앞 칸과 겹치는 문장을 지워요 (AI가 같은 말을 반복하지 않게) */
+/** 앞 칸과 겹치는 문장을 지워요 (AI가 같은 말을 반복하지 않게) */
 export function refineContent(c, f) {
   if (!c || !f) return c;
-  const cats = f.categories || {};
   const n = f.notes || {};
-  const len = (a) => (a || []).length;
-  const tk = f.test_kinds || [];
-  const allowed = {
-    strengths: len(cats.strength) || (f.tests || []).some((t) => t.result === '통과' || (t.pct ?? 0) >= 90) || (f.homework?.rate ?? 0) >= 80,
-    growth: len(cats.growth) || tk.some((k) => (k.change ?? 0) > 0) || ((f.homework?.prev_rate != null) && f.homework.rate > f.homework.prev_rate) || (f.areas || []).some((a) => a.trend === '상승'),
-    practice: len(cats.practice) || len(n.mistakes),
-    weak_concepts: len(cats.concept) || len(n.weak),
-    academy_done: len(n.extra_done) || len(cats.review),
-    academy_plan: len(n.extra_need) || len(cats.individual) || len(cats.hold) || len(cats.practice) || len(cats.concept) || len(n.mistakes) || len(n.weak),
-  };
   const out = { ...c };
-  for (const [k, ok] of Object.entries(allowed)) if (!ok) out[k] = Array.isArray(out[k]) ? [] : '';
-  // 다음 진도 이야기는 next_week에만
-  const nextKey = norm(f.next_plan || '').slice(0, 12);
+  // 칸은 그대로 두고, 같은·비슷한 문장이 다시 나오면 지워요 (다음 진도 이야기는 "다음 학습 예정" 칸을 먼저 살려요)
   const seen = [];
-  const keep = (sent, key) => {
-    if (nextKey.length >= 6 && key !== 'next_week' && key !== 'overview' && norm(sent).includes(nextKey)) return false;
+  const keep = (sent) => {
     const g = grams(sent);
     if (g.size < 4) return true;
-    if (seen.some((s) => similar(g, s) >= 0.6)) return false;
+    if (seen.some((s) => similar(g, s) >= 0.5)) return false;
     seen.push(g);
     return true;
   };
   for (const k of ORDER) {
     if (Array.isArray(out[k])) {
-      out[k] = out[k].map((item) => sentences(item).filter((s) => keep(s, k)).join(' ')).filter(Boolean);
+      out[k] = out[k].map((item) => sentences(item).filter((s) => keep(s)).join(' ')).filter(Boolean);
     } else if (out[k]) {
-      out[k] = sentences(out[k]).filter((s) => keep(s, k)).join(' ');
+      out[k] = sentences(out[k]).filter((s) => keep(s)).join(' ');
     }
   }
   // 선생님 메모가 있는데 코멘트가 비었으면 메모라도
