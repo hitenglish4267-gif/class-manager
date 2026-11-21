@@ -575,7 +575,7 @@ function secEvalItems() {
 
 // ───────── 주간 성장 리포트 ─────────
 function secGrowth() {
-  const g = A.settings.growth = { on: true, day: 6, gen: '07:00', send: '12:00', auto: true, model: '@cf/google/gemma-4-26b-a4b-it', per_tick: 4, brand: 'PAMUS ENGLISH', ...A.settings.growth };
+  const g = A.settings.growth = { on: true, day: 6, gen: '07:00', send: '12:00', auto: true, model: '@cf/google/gemma-4-26b-a4b-it', per_tick: 3, brand: 'PAMUS ENGLISH', weeks: 2, anchor: '2026-11-21', ...A.settings.growth };
   const save = () => { setSetting('growth', { ...g }); S.meta.growth = { ...g }; };
   const sw = (key, label) => h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: !!g[key], onchange: (ev) => { g[key] = ev.target.checked; save(); } }), label);
   const time = (key) => h('input', { class: 'input', type: 'time', value: g[key], step: 600, onchange: (ev) => { g[key] = ev.target.value; save(); } });
@@ -585,6 +585,8 @@ function secGrowth() {
       : h('div', { class: 'note warn small' }, 'Workers AI가 아직 연결되지 않았어요. 새 버전이 배포되면 자동으로 연결돼요. 그 전까지는 AI 없이 기록만으로 정리하고 "AI 미사용"으로 표시해요.'),
     h('div', { class: 'stack mt' }, h('div', null, sw('on', '매주 성장 리포트 만들기')), h('div', null, sw('auto', '발송 시간에 "승인된" 리포트만 자동 발송'))),
     h('div', { class: 'grid2 mt' },
+      field('보내는 주기', h('select', { class: 'input', onchange: (ev) => { g.weeks = Number(ev.target.value); save(); } }, [[2, '2주마다 (2주 기록을 모아서)'], [1, '매주']].map(([v, l]) => h('option', { value: v, selected: Number(g.weeks) === v }, l))), '2주마다면 아래 기준일과 짝이 맞는 토요일에 보내요'),
+      field('2주마다 기준 발송일', h('input', { class: 'input', type: 'date', value: g.anchor, onchange: (ev) => { g.anchor = ev.target.value; save(); } }), '이 날짜부터 2주 간격으로 보내요 (예: 11/21 → 12/5, 12/19 …)'),
       field('만드는 요일', h('select', { class: 'input', onchange: (ev) => { g.day = Number(ev.target.value); save(); } }, [6, 0, 5].map((d) => h('option', { value: d, selected: Number(g.day) === d }, `${DOW_KO[d]}요일`))), '월~금 기록을 모아요'),
       field('AI가 쓰기 시작하는 시간', time('gen'), '10분마다 몇 명씩 써요'),
       field('승인된 리포트 발송 시간', time('send'), '승인(체크)한 리포트만 나가요'),

@@ -25,7 +25,7 @@ export const EVAL_MARKS = [
 const MARK = new Map(EVAL_MARKS.map((m) => [m.id, m]));
 const POSITIVE = new Set(['vg', 'g', 'up']);
 
-const FALLBACK_MODELS = ['@cf/meta/llama-3.3-70b-instruct-fp8-fast'];
+const FALLBACK_MODELS = ['@cf/meta/llama-3.3-70b-instruct-fp8-fast', '@cf/qwen/qwen3-30b-a3b-fp8'];
 
 export const NOTE_FIELDS = [
   ['done', '실제 완료한 진도'],
@@ -56,10 +56,21 @@ export function saturdayOf(date) {
   const d = dowOf(date);
   return d === 0 ? addDays(date, -1) : addDays(date, 6 - d);
 }
-export function weekOf(ref) {
-  const sat = saturdayOf(ref);
-  return { ref: sat, from: addDays(sat, -5), to: addDays(sat, -1) };
+/** 리포트 기간: 1주(월~금) 또는 2주(지지난주 월 ~ 지난 금). 2주마다면 기준 토요일과 짝이 맞는 토요일로 맞춰요 */
+export function periodFor(settings, ref) {
+  const g = growthSettings(settings || {});
+  const weeks = Number(g.weeks) === 1 ? 1 : 2;
+  let sat = saturdayOf(ref);
+  if (weeks === 2) {
+    const anchor = saturdayOf(/^\d{4}-\d{2}-\d{2}$/.test(String(g.anchor)) ? g.anchor : sat);
+    const diff = Math.round((Date.parse(sat) - Date.parse(anchor)) / (7 * 864e5));
+    if (((diff % 2) + 2) % 2 === 1) sat = addDays(sat, 7);
+  }
+  return { ref: sat, from: addDays(sat, 2 - 7 * weeks), to: addDays(sat, -1), weeks };
 }
+export function weekOf(ref, settings) { return periodFor(settings, ref); }
+const unitWord = (w) => (w === 2 ? '2주' : '한 주');
+const prevWord = (w) => (w === 2 ? '지난 2주' : '지난주');
 
 // ───────── 한 주 사실 모으기 ─────────
 function targetFor(classType, classId, studentId) { return classType === 'individual' ? `s${studentId}` : `c${classId}`; }
@@ -84,8 +95,9 @@ function evalSummary(rows, itemName) {
   for (const r of rows || []) {
     let marks = []; try { marks = JSON.parse(r.marks || '[]'); } catch { /* */ }
     if (!marks.length) continue;
-    if (!out.has(r.item)) out.set(r.item, { id: r.item, name: itemName(r.item), counts: {}, days: 0 });
+    if (!out.has(r.item)) out.set(r.item, { id: r.item, name: itemName(r.item), counts: {}, days: 0, timeline: [] });
     const o = out.get(r.item); o.days++;
+    o.timeline.push(`${dateShort(r.date)} ${marks.filter((m) => MARK.has(m)).map((m) => MARK.get(m).label).join('·')}`);
     for (const m of marks) if (MARK.has(m)) o.counts[m] = (o.counts[m] || 0) + 1;
   }
   return [...out.values()].filter((o) => o.name);
@@ -158,6 +170,8 @@ export function buildFacts(settings, s, cur, prev, period) {
       name: e.name, group: groupOf(e.id), days: e.days,
       marks: Object.entries(e.counts).sort((a, b) => b[1] - a[1]).map(([m, n]) => `${MARK.get(m).label}${n > 1 ? ` ${n}회` : ''}`),
       trend: now != null && before != null ? (now - before > 0.15 ? '상승' : before - now > 0.15 ? '하락' : '유지') : '',
+      timeline: e.timeline,
+      prev: p ? Object.entries(p.counts).map(([m, n]) => `${MARK.get(m).label}${n > 1 ? ` ${n}회` : ''}`).join(', ') : '',
     };
   });
 
@@ -170,7 +184,7 @@ export function buildFacts(settings, s, cur, prev, period) {
 
   return {
     student: s.name, class_name: s.class_name || '', teacher: s.teacher_name || '',
-    period: { from: period.from, to: period.to, label: `${dateShort(period.from)} ~ ${dateShort(period.to)}` },
+    period: { from: period.from, to: period.to, weeks: period.weeks || 1, label: `${dateShort(period.from)} ~ ${dateShort(period.to)}` },
     attendance: { present: cnt.present, late: cnt.late, absent: cnt.absent },
     books: [...new Set(progress.map((p) => p.book).filter(Boolean))],
     progress, next_plan: nextPlan,
@@ -194,8 +208,8 @@ function hasData(f) {
 
 /** 리포트 행을 만들거나 사실만 최신으로 (AI 문장은 그대로) */
 export async function ensureReports(env, settings, ref) {
-  const w = weekOf(ref);
-  const prevW = { from: addDays(w.from, -7), to: addDays(w.to, -7) };
+  const w = periodFor(settings, ref);
+  const prevW = { from: addDays(w.from, -7 * w.weeks), to: addDays(w.to, -7 * w.weeks) };
   const [cur, prev] = await Promise.all([rangeData(env, w.from, w.to), rangeData(env, prevW.from, prevW.to)]);
   // 진도 기록에 교재 이름 붙이기
   const curNames = new Map((await all(env, 'SELECT id, name FROM curricula')).map((c) => [c.id, c.name]));
@@ -225,31 +239,109 @@ export async function ensureReports(env, settings, ref) {
 const SECTION_KEYS = ['overview', 'concepts', 'strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'next_week', 'home_tips', 'teacher_comment'];
 const LIST_KEYS = new Set(['strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'home_tips']);
 
-const SYSTEM = `당신은 초등·중등 영어학원의 경험 많은 영어 전문 선생님입니다. 학부모에게 보내는 주간 성장 리포트의 문장을 씁니다.
-반드시 지킬 규칙:
-- 아래 JSON 기록에 있는 사실만 씁니다. 기록에 없는 점수, 진도, 사건, 칭찬 사례를 절대 지어내지 않습니다.
-- 기록이 없는 항목은 빈 배열 [] 또는 빈 문자열 ""로 둡니다. 억지로 채우지 않습니다.
-- 다른 학생과 비교하지 않습니다. 이 학생의 지난주 기록(prev_*, change, trend)과 비교해 성장 중심으로 씁니다.
-- 추상적인 칭찬 대신 기록에 있는 구체적인 학습 항목·날짜·시험을 근거로 씁니다.
-- 부족한 부분은 지적만 하지 않고, 학원에서 할 구체적인 지도 계획을 함께 씁니다.
-- 학부모가 불안해할 표현은 피하되 학습 상태는 정확하게 전합니다.
-- notes.special(선생님 특별 코멘트)이 있으면 그 내용을 teacher_comment에 가장 먼저, 뜻을 바꾸지 않고 반영합니다.
-- academy_done에는 이번 주 학원에서 실제로 한 지도(notes.extra_done, '복습 진행' 등 기록)만, academy_plan에는 앞으로 할 지도 계획(notes.extra_need, '개별 지도 필요', '반복 연습 필요', '개념 확인 필요', '진도 보류' 기록 바탕)을 나눠 씁니다.
-- 과장된 칭찬, 형식적인 인사말, 이모지를 쓰지 않습니다. 따뜻하고 자연스러운 존댓말("~했어요", "~하고 있어요")로 씁니다.
-- 각 문장은 짧게, 목록 항목은 1~2문장으로 씁니다. 학생 이름은 overview에서만 한 번 부릅니다.
-출력은 설명 없이 JSON 하나만:
-{"overview":"수업 이해도, 계획한 진도를 잘 따라가는지, 수업 태도와 과제 수행 2~3문장","concepts":"이번 주 주요 학습 개념 1~2문장","strengths":[],"growth":[],"practice":[],"weak_concepts":[],"academy_done":[],"academy_plan":[],"next_week":"다음 주 학습 예정 1~2문장","home_tips":[],"teacher_comment":""}`;
+// 학원에서 쓰는 학습 항목을 학부모가 알아듣게 풀어 주는 말 (AI가 전문 용어를 설명할 때 참고)
+const TERM_HINTS = {
+  '구문 분석': '문장을 주어·동사·목적어 같은 덩어리로 나눠 구조를 파악하는 연습',
+  '직독직해': '영어 문장을 앞에서부터 의미 단위로 끊어 바로 이해하는 읽기',
+  '누적 단어 복습': '지난 Day 단어까지 섞어서 다시 확인하는 복습',
+  '문장 낭독': '본문을 소리 내어 정확하고 자연스럽게 읽는 연습',
+  '영어홀릭 라이팅': '영어홀릭 교재로 하는 주제 글쓰기',
+  '클래스카드 학습': '클래스카드 앱으로 하는 단어 반복 학습',
+  '오답 정리': '틀린 문제를 다시 풀고 왜 틀렸는지 적어 보는 활동',
+};
 
-function factsForAi(f) {
-  // 사진 토큰 등 AI에 필요 없는 값은 빼서 사용량 줄이기
-  const { media, ...rest } = f; void media;
-  return rest;
+const SYSTEM = `당신은 15년 넘게 초등·중등 아이들을 가르쳐 온 영어학원 원장이자 학습 코치입니다.
+지금부터 학부모님께 보내는 "성장 리포트"의 문장을 씁니다. 학부모님이 읽고 "선생님이 우리 아이를 정말 자세히 보고 계시구나" 하고 느낄 수 있어야 합니다.
+
+[가장 중요한 원칙]
+1. 사실은 아래 "기록 요약"에 있는 것만 씁니다. 기록에 없는 점수·진도·행동·일화를 절대 지어내지 않습니다. 근거가 없는 칸은 비워 둡니다("" 또는 []).
+2. 모든 문장에 근거를 넣습니다. 날짜, 학습 항목 이름, 교재·Unit·Day, 시험 점수, 횟수, 지난 기간과의 변화 중 하나 이상을 꼭 넣습니다.
+3. 한 항목은 "관찰 → 의미 → 다음 지도" 순서로 2~3문장으로 씁니다.
+   - 관찰: 언제, 무엇을, 어떻게 했는지
+   - 의미: 그것이 영어 실력의 어떤 부분이 자라고 있다는 뜻인지(어휘력, 문장 구조 이해, 읽기 유창성, 쓰기 표현력, 자기주도 습관 등)
+   - 다음 지도: 학원에서 무엇을, 얼마나 자주, 어떤 방법으로 할지
+4. 부족한 부분은 "아직 ~하는 단계예요"처럼 성장 과정으로 표현하고, 반드시 구체적인 지도 계획(방법·빈도·확인 방법)을 함께 씁니다. 학부모님이 불안해할 표현(심각, 문제, 부진, 걱정)은 쓰지 않되, 상태는 정확하게 전합니다.
+5. 다른 학생과 비교하지 않습니다. 이 학생의 지난 기간 기록과만 비교합니다.
+6. 학원 용어는 처음 나올 때 괄호로 쉽게 풀어 줍니다. 예: 구문 분석(문장을 주어·동사 같은 덩어리로 나눠 구조를 파악하는 연습)
+7. "학원에서 이미 한 지도"(academy_done)와 "앞으로 할 지도"(academy_plan)를 섞지 않습니다.
+8. 선생님 특별 코멘트가 있으면 teacher_comment의 첫 부분에 뜻을 바꾸지 않고 담고, 그 뒤에 따뜻한 마무리를 1~2문장 덧붙입니다.
+
+[문체]
+- 경험 많은 선생님이 직접 쓴 것처럼 따뜻하고 차분한 존댓말("~했어요", "~하고 있어요", "~할 예정이에요").
+- 금지: "열심히 했어요", "잘했어요", "최선을 다하겠습니다", "앞으로도 지켜봐 주세요" 같은 내용 없는 상투어 단독 사용, 이모지, 느낌표, 같은 문장 시작 반복, 형식적인 인사말.
+- 학생 이름은 overview 첫 문장에서 한 번만 "이름+이는/는" 형태로 부르고, 그 뒤는 생략합니다.
+
+[분량]
+- overview: 4~5문장. 이 기간 전체를 한눈에 정리(수업 이해도, 계획한 진도를 따라가는 정도, 수업 태도와 과제 수행, 가장 눈에 띈 변화).
+- concepts: 이 기간에 배운 핵심 개념·활동 2~3문장.
+- strengths, growth, practice, weak_concepts, academy_done, academy_plan: 근거가 있는 것만, 항목마다 2~3문장. 최대 4개.
+- next_week: 다음 기간 학습 예정 2문장 (교재·Unit 이름 포함).
+- home_tips: 가정에서 하루 5~10분 안에 할 수 있는 구체적인 행동 1~3개 (무엇을, 어떻게, 얼마나).
+- teacher_comment: 3~4문장.
+
+[좋은 예시 — 문체와 구체성만 참고하세요. 내용은 절대 옮기지 마세요]
+{"strengths":["11/18, 11/20 두 번의 단어 암기에서 모두 '매우 잘함'을 받았고 Voca 시험도 18/20, 19/20으로 안정적이었어요. 새로 배운 단어를 바로 문장 속에서 떠올리는 힘이 자리 잡고 있다는 뜻이라, 다음 2주는 단어를 직접 넣어 짧은 문장을 만드는 활동으로 한 단계 넓혀 갈 예정이에요."],
+"practice":["구문 분석(문장을 주어·동사 같은 덩어리로 나눠 구조를 파악하는 연습)에서 11/19에 '반복 연습 필요'가 있었어요. 문장이 길어지면 동사를 먼저 찾는 단계가 아직 익숙하지 않은 상태예요. 매 수업 시작 5분 동안 짧은 문장 3개로 동사 찾기를 함께 하고, 다음 리포트에서 변화를 다시 알려 드릴게요."]}
+
+출력은 설명 없이 아래 형식의 JSON 하나만 씁니다:
+{"overview":"","concepts":"","strengths":[],"growth":[],"practice":[],"weak_concepts":[],"academy_done":[],"academy_plan":[],"next_week":"","home_tips":[],"teacher_comment":""}`;
+
+const POLISH = `당신은 영어학원 원장입니다. 아래 "초안"은 학부모님께 보낼 성장 리포트 문장이고, "기록 요약"은 근거 자료입니다.
+초안을 다듬어 같은 JSON 형식으로만 답하세요.
+- 기록 요약에 없는 사실(점수, 날짜, 행동, 일화)이 있으면 지웁니다. 사실을 새로 만들지 않습니다.
+- 근거(날짜·항목·점수·횟수·변화)가 빠진 막연한 문장은 기록 요약에서 근거를 찾아 넣고, 찾을 수 없으면 지웁니다.
+- 상투어("열심히 했어요", "잘했어요" 단독, "지켜봐 주세요"), 느낌표, 이모지, 반복되는 문장 시작을 고칩니다.
+- 부족한 부분에는 학원의 구체적인 지도 방법·빈도가 함께 있는지 확인하고, 없으면 기록에 맞게 보탭니다.
+- 문장은 따뜻하고 차분한 존댓말로, 경험 많은 선생님이 직접 쓴 것처럼 자연스럽게 다듬습니다.
+- 빈 칸("" 또는 [])은 근거가 없으면 그대로 둡니다.`;
+
+/** AI에게 줄 기록 요약 (JSON 대신 한국어 문장 — 더 자연스럽고 정확하게 써요) */
+export function briefFor(f) {
+  const w = f.period?.weeks || 1;
+  const L = [];
+  const add = (t) => { if (t) L.push(t); };
+  add(`학생: ${f.student}${f.class_name ? ` (${f.class_name})` : ''}${f.teacher ? `, 담당 ${f.teacher} 선생님` : ''}`);
+  add(`리포트 기간: ${f.period.label} (${unitWord(w)})${f.books?.length ? `, 교재: ${f.books.join(', ')}` : ''}`);
+  const a = f.attendance || {};
+  add(`출결: 출석 ${a.present || 0}회, 지각 ${a.late || 0}회, 결석 ${a.absent || 0}회`);
+  if (f.progress?.length) {
+    add('진도 (날짜: 실제 완료 / 계획):');
+    for (const p of f.progress) add(`- ${dateShort(p.date)}: ${p.done}${p.changed ? ` (계획은 ${p.planned})` : ''}${p.homework ? ` / 숙제: ${p.homework}` : ''}`);
+  }
+  if (f.progress_rate != null) add(`계획한 진도 달성: ${f.progress_rate}%`);
+  if (f.next_plan) add(`다음 학습 예정: ${f.next_plan}`);
+  if (f.tests?.length) {
+    add('시험:');
+    for (const t of f.tests) add(`- ${dateShort(t.date)} ${t.kind} ${t.score}${t.result ? ` (${t.result})` : ''}`);
+    for (const k of f.test_kinds || []) add(`- ${k.kind} 평균 ${k.avg ?? '-'}%${k.prevAvg != null ? ` (${prevWord(w)} ${k.prevAvg}%, 변화 ${k.change >= 0 ? '+' : ''}${k.change}%p)` : ''}${k.retests ? `, 재시험 ${k.retests}회` : ''}`);
+  }
+  for (const r of f.retests || []) add(`- 재시험 기록 ${dateShort(r.date)}: ${r.text}`);
+  const hw = f.homework || {};
+  if (hw.rate != null) add(`숙제: 완료 ${hw.done}회, 미흡 ${hw.partial}회, 미제출 ${hw.missing}회 → 완료율 ${hw.rate}%${hw.prev_rate != null ? ` (${prevWord(w)} ${hw.prev_rate}%)` : ''}`);
+  if (f.areas?.length) {
+    add('수업 중 학습 평가 (항목: 날짜별 평가 / 지난 기간과 비교):');
+    for (const ar of f.areas) {
+      const hint = TERM_HINTS[ar.name] ? ` [${ar.name} = ${TERM_HINTS[ar.name]}]` : '';
+      add(`- ${ar.name}${ar.group === 'attitude' ? '(학습 태도)' : ''}: ${(ar.timeline || ar.marks).join(', ')}${ar.trend ? ` / 추세 ${ar.trend}` : ''}${ar.prev ? ` / ${prevWord(w)}: ${ar.prev}` : ''}${hint}`);
+    }
+  }
+  const n = f.notes || {};
+  const notesOut = (label, arr) => { if (arr?.length) { add(`${label}:`); for (const x of arr) add(`- ${dateShort(x.date)} ${x.text}`); } };
+  notesOut('반복되는 실수·오답', n.mistakes);
+  notesOut('이해가 부족한 개념', n.weak);
+  notesOut('학원에서 이미 한 추가 지도', n.extra_done);
+  notesOut('추가 지도가 필요한 내용', n.extra_need);
+  notesOut('수업 중 선생님 한마디', n.comments);
+  notesOut('선생님 특별 코멘트 (teacher_comment에 우선 반영)', n.special);
+  if (f.prev_notes?.mistakes?.length) add(`${prevWord(w)} 기록된 실수: ${f.prev_notes.mistakes.join(' / ')} (이번 기간에 같은 실수가 줄었는지 비교)`);
+  if (f.prev_notes?.extra_need?.length) add(`${prevWord(w)} 보강이 필요했던 내용: ${f.prev_notes.extra_need.join(' / ')} (보강 후 나아졌는지 비교)`);
+  return L.join('\n');
 }
 
 function parseJson(text) {
   if (text && typeof text === 'object') return text;
   let t = String(text || '').trim();
-  t = t.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  t = t.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
   const a = t.indexOf('{'), b = t.lastIndexOf('}');
   if (a < 0 || b <= a) throw new Error('AI 답에서 JSON을 찾지 못했어요');
   return JSON.parse(t.slice(a, b + 1));
@@ -257,26 +349,36 @@ function parseJson(text) {
 
 export function cleanContent(o) {
   const out = {};
-  const str = (v, max) => String(v == null ? '' : v).replace(/\s+\n/g, '\n').trim().slice(0, max);
+  const str = (v, max) => String(v == null ? '' : v).replace(/\s+\n/g, '\n').replace(/!+/g, '.').trim().slice(0, max);
   for (const k of SECTION_KEYS) {
-    if (LIST_KEYS.has(k)) out[k] = (Array.isArray(o[k]) ? o[k] : o[k] ? [o[k]] : []).map((x) => str(typeof x === 'object' ? Object.values(x).join(' ') : x, 300)).filter(Boolean).slice(0, 6);
-    else out[k] = str(o[k], 700);
+    if (LIST_KEYS.has(k)) out[k] = (Array.isArray(o[k]) ? o[k] : o[k] ? [o[k]] : []).map((x) => str(typeof x === 'object' ? Object.values(x).join(' ') : x, 500)).filter(Boolean).slice(0, 5);
+    else out[k] = str(o[k], 1000);
   }
   return out;
+}
+
+async function runModel(env, model, messages) {
+  const r = await env.AI.run(model, { messages, max_tokens: 3000, temperature: 0.4 });
+  const text = typeof r === 'string' ? r : r?.response ?? r?.choices?.[0]?.message?.content ?? r?.result?.response;
+  return cleanContent(parseJson(text));
 }
 
 async function aiWrite(env, settings, facts) {
   if (!env.AI) throw new Error('Workers AI가 연결되지 않았어요 (wrangler.toml의 [ai] 설정 확인)');
   const g = growthSettings(settings);
   const models = [g.model, ...FALLBACK_MODELS.filter((m) => m !== g.model)];
-  const messages = [{ role: 'system', content: SYSTEM }, { role: 'user', content: `기록(JSON):\n${JSON.stringify(factsForAi(facts))}` }];
+  const brief = briefFor(facts);
   let lastErr = null;
   for (const model of models) {
     try {
-      const r = await env.AI.run(model, { messages, max_tokens: 2000, temperature: 0.5 });
-      const text = typeof r === 'string' ? r : r?.response ?? r?.choices?.[0]?.message?.content ?? r?.result?.response;
-      const content = cleanContent(parseJson(text));
+      // 1차: 초안
+      let content = await runModel(env, model, [{ role: 'system', content: SYSTEM }, { role: 'user', content: `기록 요약:\n${brief}` }]);
       if (!content.overview && !content.strengths.length) throw new Error('AI 답이 비어 있어요');
+      // 2차: 근거·문체 다듬기 (실패하면 초안 그대로)
+      try {
+        const polished = await runModel(env, model, [{ role: 'system', content: POLISH }, { role: 'user', content: `기록 요약:\n${brief}\n\n초안(JSON):\n${JSON.stringify(content)}` }]);
+        if (polished.overview) content = polished;
+      } catch { /* 초안 사용 */ }
       // 선생님이 직접 쓴 특별 코멘트는 AI가 빠뜨려도 그대로 맨 앞에
       const special = (facts.notes?.special || []).map((x) => x.text).filter(Boolean).join(' ');
       if (special && !content.teacher_comment.includes(special.slice(0, 15))) content.teacher_comment = [special, content.teacher_comment].filter(Boolean).join('\n');
@@ -286,29 +388,33 @@ async function aiWrite(env, settings, facts) {
   throw lastErr || new Error('AI 호출 실패');
 }
 
-/** AI를 못 쓸 때: 기록만으로 정리 (지어내지 않고, 기록을 문장으로 옮기기만) */
+/** AI를 못 쓸 때: 기록만으로 정리 (지어내지 않고, 기록을 날짜·평가와 함께 문장으로 옮기기만) */
 export function ruleWrite(f) {
-  const c = f.categories;
-  const list = (names, tail) => names.map((n) => `${n}: ${tail}`);
-  const j = (arr) => arr.map((x) => x.text).filter(Boolean);
-  const att = f.attendance;
+  const w = f.period?.weeks || 1;
+  const j = (arr) => (arr || []).map((x) => `${dateShort(x.date)} ${x.text}`).filter(Boolean);
+  const byCat = (marks) => (f.areas || []).filter((a) => (a.timeline || []).some((t) => marks.some((m) => t.includes(m))));
+  const tl = (a, marks) => (a.timeline || []).filter((t) => marks.some((m) => t.includes(m))).join(', ');
+  const att = f.attendance || {};
+  const hw = f.homework || {};
+  const tk = (f.test_kinds || []).map((k) => `${k.kind} 평균 ${k.avg}%${k.change != null ? `(${prevWord(w)}보다 ${k.change >= 0 ? '+' : ''}${k.change}%p)` : ''}`).join(', ');
   const overview = [
-    `${f.student} 학생은 이번 주 ${att.present + att.late}회 수업에 참여했어요${att.late ? ` (지각 ${att.late}회)` : ''}${att.absent ? `, 결석 ${att.absent}회가 있었어요` : ''}.`,
-    f.homework.rate != null ? `숙제 완료율은 ${f.homework.rate}%${f.homework.prev_rate != null ? ` (지난주 ${f.homework.prev_rate}%)` : ''}예요.` : '',
-    f.test_avg != null ? `이번 주 시험 평균은 ${f.test_avg}%${f.prev_test_avg != null ? ` (지난주 ${f.prev_test_avg}%)` : ''}예요.` : '',
+    `${f.student}는 ${unitWord(w)} 동안 ${(att.present || 0) + (att.late || 0)}번의 수업에 참여했어요${att.absent ? ` (결석 ${att.absent}회)` : ''}.`,
+    f.progress?.length ? `${f.books?.length ? f.books.join(', ') + ' ' : ''}${f.progress[0].done.split(' · ')[0]}부터 ${f.progress[f.progress.length - 1].done.split(' · ')[0]}까지 학습했어요.` : '',
+    tk ? `시험은 ${tk}였어요.` : '',
+    hw.rate != null ? `숙제 완료율은 ${hw.rate}%${hw.prev_rate != null ? `로 ${prevWord(w)} ${hw.prev_rate}%와 비교할 수 있어요` : '예요'}.` : '',
   ].filter(Boolean).join(' ');
   return {
     overview,
-    concepts: f.progress.length ? `이번 주에는 ${[...new Set(f.progress.map((p) => p.done).filter(Boolean))].slice(0, 4).join(', ')}을(를) 학습했어요.` : '',
-    strengths: list(c.strength, '수업에서 잘 해냈어요.'),
-    growth: list(c.growth, '지난 수업보다 나아지고 있어요.'),
-    practice: list(c.practice, '반복 연습으로 더 익숙해지도록 하고 있어요.'),
-    weak_concepts: [...list(c.concept, '개념을 한 번 더 확인하고 있어요.'), ...j(f.notes.weak)],
-    academy_done: [...j(f.notes.extra_done), ...list(c.review, '복습을 진행했어요.')],
-    academy_plan: [...j(f.notes.extra_need), ...list(c.individual, '개별 지도로 함께 보완할 예정이에요.'), ...list(c.hold, '진도를 조정해 충분히 익힌 뒤 넘어갈 예정이에요.')],
-    next_week: f.next_plan ? `다음 주에는 ${f.next_plan}을(를) 학습할 예정이에요.` : '',
-    home_tips: f.homework.missing || f.homework.partial ? ['가정에서 숙제를 끝까지 마쳤는지 한 번씩 확인해 주시면 큰 도움이 돼요.'] : [],
-    teacher_comment: j(f.notes.special).join(' ') || j(f.notes.comments).slice(-2).join(' '),
+    concepts: '',
+    strengths: byCat(['매우 잘함', '잘함']).map((a) => `${a.name}: ${tl(a, ['매우 잘함', '잘함'])} 평가를 받았어요.`),
+    growth: byCat(['향상 중']).map((a) => `${a.name}: ${tl(a, ['향상 중'])}에 이전보다 나아진 모습이 기록됐어요.`),
+    practice: byCat(['반복 연습 필요']).map((a) => `${a.name}: ${tl(a, ['반복 연습 필요'])} — 수업에서 반복 연습을 이어 가고 있어요.`),
+    weak_concepts: [...byCat(['개념 확인 필요']).map((a) => `${a.name}: ${tl(a, ['개념 확인 필요'])} — 개념을 다시 짚어 주고 있어요.`), ...j(f.notes?.weak)],
+    academy_done: [...j(f.notes?.extra_done), ...byCat(['복습 진행']).map((a) => `${a.name}: ${tl(a, ['복습 진행'])} 복습을 진행했어요.`)],
+    academy_plan: [...j(f.notes?.extra_need), ...byCat(['개별 지도 필요']).map((a) => `${a.name}: 개별 지도로 보완할 예정이에요.`), ...byCat(['진도 보류']).map((a) => `${a.name}: 충분히 익힌 뒤 다음 진도로 넘어갈 예정이에요.`)],
+    next_week: f.next_plan ? `다음에는 ${f.next_plan}을(를) 학습할 예정이에요.` : '',
+    home_tips: [],
+    teacher_comment: (f.notes?.special || []).map((x) => x.text).join(' ') || (f.notes?.comments || []).slice(-2).map((x) => x.text).join(' '),
   };
 }
 
@@ -351,7 +457,7 @@ export function growthVars(settings, baseUrl, r, facts) {
   const tk = facts.test_kinds || [];
   return {
     학원: settings.academy || '', 학원연락처: settings.academy_phone || '', 학생명: facts.student, 반: facts.class_name,
-    기간: facts.period?.label || '', 날짜: facts.period?.label || '',
+    기간: facts.period?.label || '', 날짜: facts.period?.label || '', 학습기간: facts.period?.label || '',
     학습내용: [...new Set((facts.progress || []).map((p) => String(p.done || '').split(' · ')[0]).filter(Boolean))].slice(0, 4).join(', '),
     시험요약: tk.map((k) => `${k.kind} ${k.avg != null ? `평균 ${k.avg}%` : ''}${k.change != null ? `(${k.change >= 0 ? '+' : ''}${k.change})` : ''}`.trim()).join(', '),
     숙제현황: facts.homework && facts.homework.rate != null ? `${facts.homework.rate}%` : '',
@@ -363,17 +469,18 @@ export function growthVars(settings, baseUrl, r, facts) {
 export function reportText(settings, facts, c) {
   const L = [];
   const sec = (t, body) => { const b = Array.isArray(body) ? body.filter(Boolean).map((x) => `- ${x}`).join('\n') : String(body || '').trim(); if (b) L.push(`■ ${t}\n${b}`); };
-  L.push(`[${settings.academy || '학원'}] 주간 성장 리포트`, `${facts.student} · ${facts.period.label}`);
-  sec('이번 주 학습 진도', [...(facts.progress || []).map((p) => `${dateShort(p.date)} ${p.done}`), c.concepts]);
-  sec('이번 주 시험 결과', (facts.tests || []).map((t) => `${dateShort(t.date)} ${t.kind} ${t.score}${t.result ? ` (${t.result})` : ''}`));
+  const W = facts.period?.weeks || 1;
+  L.push(`[${settings.academy || '학원'}] ${W === 2 ? '2주' : '주간'} 성장 리포트`, `${facts.student} · ${facts.period.label}`);
+  sec(`이번 ${W === 2 ? '2주' : '주'} 학습 진도`, [...(facts.progress || []).map((p) => `${dateShort(p.date)} ${p.done}`), c.concepts]);
+  sec(`이번 ${W === 2 ? '2주' : '주'} 시험 결과`, (facts.tests || []).map((t) => `${dateShort(t.date)} ${t.kind} ${t.score}${t.result ? ` (${t.result})` : ''}`));
   sec('학습 성취도', c.overview);
   sec('잘하고 있는 부분', c.strengths);
-  sec('지난주보다 성장한 부분', c.growth);
+  sec(`${prevWord(W)}보다 성장한 부분`, c.growth);
   sec('조금 더 연습이 필요한 부분', c.practice);
   sec('어려워하는 학습 개념', c.weak_concepts);
   sec('학원에서 지도한 내용', c.academy_done);
   sec('학원에서 추가로 지도할 부분', c.academy_plan);
-  sec('다음 주 학습 예정', c.next_week);
+  sec(`다음 ${W === 2 ? '2주' : '주'} 학습 예정`, c.next_week);
   sec('가정에서 도와주시면 좋은 부분', c.home_tips);
   sec('선생님 코멘트', c.teacher_comment);
   return L.join('\n\n');
@@ -385,6 +492,7 @@ const MARK_COLOR = { '매우 잘함': '#cdeec0', '잘함': '#e3f5d6', '향상 �
 
 export function reportHtml(settings, r, facts, c, opts = {}) {
   const g = growthSettings(settings);
+  const W = facts.period?.weeks || 1;
   const ul = (arr) => (arr && arr.length ? `<ul>${arr.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '');
   const p = (t) => (t ? `<p>${esc(t).replace(/\n/g, '<br>')}</p>` : '');
   let n = 0;
@@ -395,25 +503,25 @@ export function reportHtml(settings, r, facts, c, opts = {}) {
   const prog = (facts.progress || []).length ? `<table><thead><tr><th>날짜</th><th>교재</th><th>완료한 진도</th></tr></thead><tbody>${facts.progress.map((x) => `<tr><td>${esc(dateShort(x.date))}</td><td>${esc(x.book)}</td><td>${esc(x.done)}${x.changed ? `<div class="sub">계획: ${esc(x.planned)}</div>` : ''}</td></tr>`).join('')}</tbody></table>` : '';
   const tk = facts.test_kinds || [];
   const tests = (facts.tests || []).length ? `<table><thead><tr><th>날짜</th><th>시험</th><th>점수</th><th>결과</th></tr></thead><tbody>${facts.tests.map((t) => `<tr><td>${esc(dateShort(t.date))}</td><td>${esc(t.kind)}</td><td>${esc(t.score)}</td><td>${esc(t.result)}</td></tr>`).join('')}</tbody></table>
-    <div class="chips">${tk.map((k) => `<span class="chip">${esc(k.kind)} 평균 ${k.avg != null ? `${k.avg}%` : '-'}${k.change != null ? ` <b class="${k.change >= 0 ? 'up' : 'down'}">${k.change >= 0 ? '▲' : '▼'} ${Math.abs(k.change)}</b> <small>지난주 대비</small>` : ''}</span>`).join('')}</div>
+    <div class="chips">${tk.map((k) => `<span class="chip">${esc(k.kind)} 평균 ${k.avg != null ? `${k.avg}%` : '-'}${k.change != null ? ` <b class="${k.change >= 0 ? 'up' : 'down'}">${k.change >= 0 ? '▲' : '▼'} ${Math.abs(k.change)}</b> <small>${prevWord(W)} 대비</small>` : ''}</span>`).join('')}</div>
     ${(facts.retests || []).length ? `<div class="sub">재시험: ${facts.retests.map((x) => esc(`${dateShort(x.date)} ${x.text}`)).join(' / ')}</div>` : ''}` : '';
   const areas = (facts.areas || []).length ? `<div class="areas">${facts.areas.map((a) => `<div class="area"><div class="an">${esc(a.name)}${a.trend ? ` <small class="tr ${a.trend === '상승' ? 'up' : a.trend === '하락' ? 'down' : ''}">${esc(a.trend)}</small>` : ''}</div><div>${a.marks.map((m) => { const base = m.replace(/ \d+회$/, ''); return `<span class="mk" style="background:${MARK_COLOR[base] || '#eee'}">${esc(m)}</span>`; }).join('')}</div></div>`).join('')}</div>` : '';
   const hw = facts.homework || {};
-  const ach = `${p(c.overview)}${areas}<div class="chips">${hw.rate != null ? `<span class="chip">숙제 완료율 ${hw.rate}%${hw.prev_rate != null ? ` <small>(지난주 ${hw.prev_rate}%)</small>` : ''}</span>` : ''}${facts.progress_rate != null ? `<span class="chip">계획 진도 달성 ${facts.progress_rate}%</span>` : ''}</div>`;
-  const academy = `${c.academy_done.length ? `<h3>이번 주 학원에서 지도한 내용</h3>${ul(c.academy_done)}` : ''}${c.academy_plan.length ? `<h3>앞으로 지도할 계획</h3>${ul(c.academy_plan)}` : ''}`;
+  const ach = `${p(c.overview)}${areas}<div class="chips">${hw.rate != null ? `<span class="chip">숙제 완료율 ${hw.rate}%${hw.prev_rate != null ? ` <small>(${prevWord(W)} ${hw.prev_rate}%)</small>` : ''}</span>` : ''}${facts.progress_rate != null ? `<span class="chip">계획 진도 달성 ${facts.progress_rate}%</span>` : ''}</div>`;
+  const academy = `${c.academy_done.length ? `<h3>이번 기간 학원에서 지도한 내용</h3>${ul(c.academy_done)}` : ''}${c.academy_plan.length ? `<h3>앞으로 지도할 계획</h3>${ul(c.academy_plan)}` : ''}`;
   const photos = (facts.media || []).length ? `<div class="photos">${facts.media.map((t) => `<img src="/m/${esc(t)}" loading="lazy" alt="">`).join('')}</div>` : '';
   const badge = r.source === 'rule' ? '<div class="note">이번 리포트는 AI 없이 수업 기록만으로 정리했어요.</div>' : '';
   const body = [
     sec('학생 이름 및 학습 기간', head),
-    sec('이번 주 학습 진도', prog + p(c.concepts)),
-    sec('이번 주 시험 결과', tests),
+    sec(`이번 ${W === 2 ? '2주' : '주'} 학습 진도`, prog + p(c.concepts)),
+    sec(`이번 ${W === 2 ? '2주' : '주'} 시험 결과`, tests),
     sec('학습 성취도', ach),
     sec('우리 아이가 잘하고 있는 부분', ul(c.strengths), 'mint'),
-    sec('지난주보다 성장한 부분', ul(c.growth), 'sky'),
+    sec(`${prevWord(W)}보다 성장한 부분`, ul(c.growth), 'sky'),
     sec('조금 더 연습이 필요한 부분', ul(c.practice), 'lemon'),
     sec('이해가 부족하거나 어려워하는 학습 개념', ul(c.weak_concepts), 'peach'),
     sec('학원에서 추가로 지도할 부분', academy, 'lilac'),
-    sec('다음 주 학습 예정 내용', p(c.next_week) || p(facts.next_plan ? `다음 주에는 ${facts.next_plan}을(를) 학습할 예정이에요.` : '')),
+    sec(`다음 ${W === 2 ? '2주' : '주'} 학습 예정 내용`, p(c.next_week) || p(facts.next_plan ? `다음에는 ${facts.next_plan}을(를) 학습할 예정이에요.` : '')),
     sec('가정에서 함께 도와주시면 좋은 부분', ul(c.home_tips)),
     sec('선생님의 특별 코멘트', p(c.teacher_comment), 'note-sec'),
     sec('학습 결과물 및 활동 사진', photos),
@@ -444,7 +552,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 @media print{body{background:#fff}.tools{display:none}main{padding:0}.sec{border-color:#e6e3ee}}
 </style></head><body><main>
 ${opts.noTools ? '' : '<div class="tools"><button onclick="window.print()">PDF 저장 · 인쇄</button></div>'}
-<div class="cover"><div class="brand">${esc(g.brand || 'PAMUS ENGLISH')}</div><div class="ttl">WEEKLY GROWTH REPORT</div><div class="subt">우리 아이의 일주일 성장 이야기</div><div class="campus">${esc(settings.academy || '')}</div></div>
+<div class="cover"><div class="brand">${esc(g.brand || 'PAMUS ENGLISH')}</div><div class="ttl">${W === 2 ? 'BI-WEEKLY GROWTH REPORT' : 'WEEKLY GROWTH REPORT'}</div><div class="subt">우리 아이의 ${W === 2 ? '2주' : '일주일'} 성장 이야기</div><div class="campus">${esc(settings.academy || '')}</div></div>
 ${badge}${body}
 <div class="foot">${esc(settings.academy || '')}${settings.academy_phone ? ` · 문의 ${esc(settings.academy_phone)}` : ''}</div>
 </main></body></html>`;
@@ -492,7 +600,7 @@ export async function reportPage(env, request, token) {
   return new Response(reportHtml(settings, r, facts, c), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' } });
 }
 function pinForm(settings, err) {
-  return page('리포트 확인', `<div style="font-size:12px;letter-spacing:.16em;color:#5b6bb5;font-weight:700">WEEKLY GROWTH REPORT</div><h2 style="margin:6px 0">${esc(settings.academy || '')}</h2>
+  return page('리포트 확인', `<div style="font-size:12px;letter-spacing:.16em;color:#5b6bb5;font-weight:700">GROWTH REPORT</div><h2 style="margin:6px 0">${esc(settings.academy || '')}</h2>
   <p>학부모님 휴대폰 번호 <b>뒷자리 4자리</b>를 입력하시면<br>우리 아이 리포트를 보실 수 있어요.</p>
   <form method="post"><input name="pin" inputmode="numeric" maxlength="4" autocomplete="off" autofocus required><br>${err ? `<div class="err">${esc(err)}</div>` : ''}<button>리포트 보기</button></form>`);
 }

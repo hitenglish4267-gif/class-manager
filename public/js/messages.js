@@ -5,10 +5,21 @@ import { S, setDate, courseTabs } from './state.js';
 
 const KINDS = [['daily', '일간'], ['missing', '미제출'], ['hw5', '숙제 5회'], ['growth', '성장 리포트'], ['weekly', '주간'], ['monthly', '월간']];
 const saturdayOf = (d) => { const w = dowOf(d); return w === 0 ? addDays(d, -1) : addDays(d, 6 - w); };
+/** 성장 리포트 기준 토요일 (2주마다면 기준일과 짝이 맞는 토요일로) — 서버 periodFor와 같은 계산 */
+function growthRef(d) {
+  const g = S.meta.growth || {};
+  let sat = saturdayOf(d);
+  if (Number(g.weeks) !== 1) {
+    const anchor = saturdayOf(/^\d{4}-\d{2}-\d{2}$/.test(String(g.anchor)) ? g.anchor : sat);
+    const diff = Math.round((Date.parse(sat) - Date.parse(anchor)) / (7 * 864e5));
+    if (((diff % 2) + 2) % 2 === 1) sat = addDays(sat, 7);
+  }
+  return sat;
+}
 
 export async function renderMessages(main) {
   let kind = sessionStorage.getItem('cm_msg_kind') || 'daily';
-  let ref = kind === 'monthly' ? (sessionStorage.getItem('cm_msg_month') || kstToday().slice(0, 7)) : kind === 'growth' ? saturdayOf(S.date) : S.date;
+  let ref = kind === 'monthly' ? (sessionStorage.getItem('cm_msg_month') || kstToday().slice(0, 7)) : kind === 'growth' ? growthRef(S.date) : S.date;
   let data = null;
   const checks = {}; // 이번 화면에서 바꾼 체크 상태 (자동 저장)
   let sending = false;
@@ -38,9 +49,10 @@ export async function renderMessages(main) {
   if (kind === 'monthly') info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } }, '월간 리포트는 그 달 1일부터 말일까지를 모아요. 보낼 학생만 체크해서 보내 주세요.'));
   if (kind === 'growth') {
     const g = S.meta.growth || {};
+    const two = Number(g.weeks) !== 1;
     info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } },
-      `${addDays(ref, -5).slice(5).replace('-', '/')}(월) ~ ${addDays(ref, -1).slice(5).replace('-', '/')}(금) 기록으로 만든 리포트예요. `,
-      `매주 ${'일월화수목금토'[g.day ?? 6]}요일 ${g.gen || '07:00'}부터 AI가 몇 명씩 써요. 내용을 확인하고 "승인"을 체크하면 `,
+      `${addDays(ref, two ? -12 : -5).slice(5).replace('-', '/')}(월) ~ ${addDays(ref, -1).slice(5).replace('-', '/')}(금) ${two ? '2주' : '한 주'} 기록으로 만든 리포트예요. `,
+      `${two ? '2주마다' : '매주'} ${'일월화수목금토'[g.day ?? 6]}요일 ${g.gen || '07:00'}부터 AI가 몇 명씩 써요. 내용을 확인하고 "승인"을 체크하면 `,
       g.auto ? `${g.send || '12:00'}에 승인된 리포트만 자동으로 보내요.` : '"지금 보내기"로 보내 주세요.'));
   }
   if (kind === 'hw5') info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } },
@@ -81,7 +93,7 @@ export async function renderMessages(main) {
       kind !== 'monthly' ? h('span', { class: 'small muted' }, dateLabel(ref)) : null);
     drawBar();
     if (!data.generated && !data.list.length) {
-      const when = kind === 'growth' ? `매주 ${'일월화수목금토'[(S.meta.growth || {}).day ?? 6]}요일 ${(S.meta.growth || {}).gen || '07:00'}에 자동으로 만들어져요.` : kind === 'daily' || kind === 'missing' || kind === 'hw5' ? `매일 ${sch.preview}에 자동으로 만들어져요.` : kind === 'weekly' ? `매주 ${'일월화수목금토'[sch.weekly_day]}요일 ${sch.preview}에 자동으로 만들어져요.` : `매달 말일 ${sch.preview}에 자동으로 만들어져요.`;
+      const when = kind === 'growth' ? `${Number((S.meta.growth || {}).weeks) !== 1 ? '2주마다' : '매주'} ${'일월화수목금토'[(S.meta.growth || {}).day ?? 6]}요일 ${(S.meta.growth || {}).gen || '07:00'}에 자동으로 만들어져요.` : kind === 'daily' || kind === 'missing' || kind === 'hw5' ? `매일 ${sch.preview}에 자동으로 만들어져요.` : kind === 'weekly' ? `매주 ${'일월화수목금토'[sch.weekly_day]}요일 ${sch.preview}에 자동으로 만들어져요.` : `매달 말일 ${sch.preview}에 자동으로 만들어져요.`;
       list.replaceChildren(h('div', { class: 'card empty' }, h('b', null, '아직 미리보기가 없어요'), h('div', null, when),
         h('button', { class: 'btn primary mt', onclick: async (e) => { e.target.disabled = true; await outbox.flushAll(); await api('/api/messages/generate', { kind, ref }); if (kind === 'growth') return runAi(e.target); load(); } }, kind === 'growth' ? '지금 리포트 만들기' : '지금 미리보기 만들기')));
       return;
