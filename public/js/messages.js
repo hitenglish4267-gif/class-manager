@@ -238,8 +238,18 @@ export async function renderMessages(main) {
       frame.srcdoc = R.html;
       const c = { ...R.content };
       const tas = FIELDS.map(([k, label]) => {
-        const ta = h('textarea', { class: 'input', value: LIST.has(k) ? (c[k] || []).join('\n') : (c[k] || ''), oninput: () => { c[k] = LIST.has(k) ? ta.value.split('\n').map((x) => x.trim()).filter(Boolean) : ta.value; } });
-        return h('label', { class: 'field mt-s' }, h('span', { class: 'lbl' }, label, LIST.has(k) ? h('span', { class: 'tiny muted', style: { fontWeight: 500 } }, ' — 한 줄에 하나씩') : null), ta);
+        const ta = h('textarea', { class: 'input', rows: k === 'teacher_comment' ? 4 : 2, value: LIST.has(k) ? (c[k] || []).join('\n') : (c[k] || ''), oninput: () => { c[k] = LIST.has(k) ? ta.value.split('\n').map((x) => x.trim()).filter(Boolean) : ta.value; } });
+        // 선생님 코멘트: 짧게 적고 "AI로 다듬기"를 누르면 친절하고 전문적인 문장으로
+        const polish = k === 'teacher_comment' ? h('button', { class: 'btn small mt-s', type: 'button', onclick: async (e) => {
+          if (!ta.value.trim()) { toast('코멘트를 짧게라도 먼저 적어 주세요', true); return; }
+          e.target.disabled = true; e.target.textContent = 'AI가 다듬는 중…';
+          try { const r = await api('/api/report/polish', { id: R.id, text: ta.value }); ta.value = r.text; c[k] = r.text; toast('다듬었어요. 확인하고 "고친 내용 저장"을 눌러 주세요'); }
+          catch (err) { toast(err.message, true); }
+          e.target.disabled = false; e.target.textContent = 'AI로 다듬기';
+        } }, 'AI로 다듬기') : null;
+        return h('label', { class: 'field mt-s' }, h('span', { class: 'lbl' }, label,
+          LIST.has(k) ? h('span', { class: 'tiny muted', style: { fontWeight: 500 } }, ' — 한 줄에 하나씩') : null,
+          k === 'teacher_comment' ? h('span', { class: 'tiny muted', style: { fontWeight: 500 } }, ' — 짧게 적고 "AI로 다듬기"를 누르면 친절하고 전문적으로 바꿔 줘요') : null), ta, polish);
       });
       const edit = h('div', { class: 'rep-edit hidden' }, ...tas,
         h('div', { class: 'row mt' },

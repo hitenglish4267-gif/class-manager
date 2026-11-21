@@ -9,7 +9,7 @@ import { oauthStatus, getAccessToken } from './solapi-oauth.js';
 import { renderTemplate, checkKakaoFields, kakaoVariables, kakaoFieldText } from './render.js';
 import { RECOMMENDED_KAKAO, DEFAULT_SMS, KIND_LABELS, CUSHION_LABELS, BASIC_ONLY_KINDS } from './defaults.js';
 import { mediaStart, mediaPart, mediaComplete, mediaDelete, mediaList, r2Ready } from './media.js';
-import { evalDay, saveEvalMarks, saveDayNote, saveEvalDayItems, processQueue, contentOf, cleanContent, ruleWrite, reportHtml, reportText, growthSettings, periodFor, NOTE_FIELDS, EVAL_MARKS } from './growth.js';
+import { evalDay, saveEvalMarks, saveDayNote, saveEvalDayItems, processQueue, contentOf, cleanContent, ruleWrite, reportHtml, reportText, growthSettings, periodFor, polishComment, NOTE_FIELDS, EVAL_MARKS } from './growth.js';
 
 const SESSION_DAYS = 60;
 
@@ -743,6 +743,12 @@ export async function handleApi(request, env, ctx, url, version) {
     'POST /api/report/edit': () => reportEdit(env, me, body),
     'POST /api/report/regenerate': () => reportRegenerate(env, me, body),
     'POST /api/report/process': () => reportProcess(env, body),
+    'POST /api/report/polish': async () => {
+      const r = await reportRow(env, me, body.id);
+      const text = String(body.text || '').trim();
+      if (!text) throw bad('코멘트를 먼저 적어 주세요');
+      return { text: await polishComment(env, await getSettings(env), JSON.parse(r.facts || '{}'), text) };
+    },
     'GET /api/today': () => today(env, me, url),
     'POST /api/attendance': () => saveAttendance(env, me, body, ctx),
     'POST /api/attendance/all': () => attendanceAll(env, me, body, ctx),

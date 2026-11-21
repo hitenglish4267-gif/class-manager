@@ -35,7 +35,7 @@ export const NOTE_FIELDS = [
   ['weak', '이해가 부족한 개념'],
   ['extra_done', '추가 지도한 내용'],
   ['extra_need', '추가 지도가 필요한 내용'],
-  ['special', '선생님 특별 코멘트 (주간 리포트에 우선 반영)'],
+  ['special', '선생님 특별 코멘트 (짧게 메모만 해도 리포트에서 다듬어 드려요)'],
   ['memo', '메모'],
 ];
 const NOTE_KEYS = NOTE_FIELDS.map(([k]) => k);
@@ -156,6 +156,9 @@ export function buildFacts(settings, s, cur, prev, period) {
   const tPrev = testSummary(prev.tests.get(s.id));
   const testKinds = tNow.map((k) => { const p = tPrev.find((x) => x.kind === k.kind); return { ...k, prevAvg: p ? p.avg : null, change: p && p.avg != null && k.avg != null ? k.avg - p.avg : null }; });
   const scored = testsNow.filter((t) => t.pct != null);
+  // 그래프용: 지난 기간 + 이번 기간 시험 점수(%)
+  const toPt = (t, period) => (t.correct != null && t.total ? { date: t.date, kind: t.kind, pct: Math.round((t.correct / t.total) * 100), period } : null);
+  const testSeries = [...(prev.tests.get(s.id) || []).map((t) => toPt(t, 'prev')), ...(cur.tests.get(s.id) || []).map((t) => toPt(t, 'cur'))].filter(Boolean);
   const prevScored = (prev.tests.get(s.id) || []).filter((t) => t.correct != null && t.total);
 
   const evNow = evalSummary(cur.evals.get(s.id), nameOf);
@@ -189,7 +192,7 @@ export function buildFacts(settings, s, cur, prev, period) {
     books: [...new Set(progress.map((p) => p.book).filter(Boolean))],
     progress, next_plan: nextPlan,
     progress_rate: progress.length ? pct(progress.filter((p) => !p.changed).length, progress.length) : null,
-    tests: testsNow, test_kinds: testKinds,
+    tests: testsNow, test_kinds: testKinds, test_series: testSeries,
     test_avg: scored.length ? Math.round(scored.reduce((a, t) => a + t.pct, 0) / scored.length) : null,
     prev_test_avg: prevScored.length ? Math.round(prevScored.reduce((a, t) => a + (t.correct / t.total) * 100, 0) / prevScored.length) : null,
     retests: pick('retest'),
@@ -264,7 +267,7 @@ const SYSTEM = `당신은 15년 넘게 초등·중등 아이들을 가르쳐 온
 5. 다른 학생과 비교하지 않습니다. 이 학생의 지난 기간 기록과만 비교합니다.
 6. 학원 용어는 처음 나올 때 괄호로 쉽게 풀어 줍니다. 예: 구문 분석(문장을 주어·동사 같은 덩어리로 나눠 구조를 파악하는 연습)
 7. "학원에서 이미 한 지도"(academy_done)와 "앞으로 할 지도"(academy_plan)를 섞지 않습니다.
-8. 선생님 특별 코멘트가 있으면 teacher_comment의 첫 부분에 뜻을 바꾸지 않고 담고, 그 뒤에 따뜻한 마무리를 1~2문장 덧붙입니다.
+8. 선생님 특별 코멘트는 짧은 메모일 수 있습니다. 메모의 뜻과 사실은 그대로 살리되, 학부모님께 드리는 따뜻하고 전문적인 3~4문장으로 풀어 teacher_comment에 씁니다. (예: 메모 "발표 자신감 생김, 단어 실수 줄이기" → 발표할 때 목소리와 표정에서 자신감이 느껴진다는 점, 그것이 어떤 성장인지, 단어 철자 실수를 줄이기 위해 학원에서 어떻게 도울지, 가정에서의 격려 부탁) 메모에 없는 사실(날짜·점수·일화)은 기록 요약에 있을 때만 보탭니다.
 
 [문체]
 - 경험 많은 선생님이 직접 쓴 것처럼 따뜻하고 차분한 존댓말("~했어요", "~하고 있어요", "~할 예정이에요").
@@ -379,10 +382,36 @@ async function aiWrite(env, settings, facts) {
         const polished = await runModel(env, model, [{ role: 'system', content: POLISH }, { role: 'user', content: `기록 요약:\n${brief}\n\n초안(JSON):\n${JSON.stringify(content)}` }]);
         if (polished.overview) content = polished;
       } catch { /* 초안 사용 */ }
-      // 선생님이 직접 쓴 특별 코멘트는 AI가 빠뜨려도 그대로 맨 앞에
+      // 선생님 특별 코멘트가 있는데 AI가 비워 두면 메모 그대로라도 넣기
       const special = (facts.notes?.special || []).map((x) => x.text).filter(Boolean).join(' ');
-      if (special && !content.teacher_comment.includes(special.slice(0, 15))) content.teacher_comment = [special, content.teacher_comment].filter(Boolean).join('\n');
+      if (special && !content.teacher_comment) content.teacher_comment = special;
       return { content, model };
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('AI 호출 실패');
+}
+
+const COMMENT_SYSTEM = `당신은 15년 넘게 아이들을 가르쳐 온 영어학원 원장입니다. 선생님이 짧게 적은 메모를 학부모님께 드리는 "선생님 코멘트"로 다듬습니다.
+- 메모의 뜻과 사실은 그대로 살립니다. 메모와 기록 요약에 없는 사실(날짜·점수·일화)은 지어내지 않습니다.
+- 3~4문장, 따뜻하고 차분한 존댓말("~했어요", "~하고 있어요", "~할 예정이에요").
+- 구성: 아이의 모습(관찰) → 그것이 어떤 성장인지(의미) → 학원에서의 다음 지도 → 가정에 드리는 짧은 부탁이나 격려(필요할 때만).
+- 상투어("열심히 했어요", "잘했어요" 단독, "지켜봐 주세요"), 느낌표, 이모지는 쓰지 않습니다.
+- 다듬은 코멘트 문장만 출력합니다. 따옴표나 설명을 붙이지 않습니다.`;
+
+/** 선생님이 짧게 쓴 코멘트를 친절하고 전문적인 문장으로 (리포트 편집 화면의 "AI로 다듬기") */
+export async function polishComment(env, settings, facts, text) {
+  if (!env.AI) throw new Error('Workers AI가 연결되지 않았어요');
+  const g = growthSettings(settings);
+  const models = [g.model, ...FALLBACK_MODELS.filter((m) => m !== g.model)];
+  const brief = facts ? briefFor(facts) : '';
+  let lastErr = null;
+  for (const model of models) {
+    try {
+      const r = await env.AI.run(model, { messages: [{ role: 'system', content: COMMENT_SYSTEM }, { role: 'user', content: `${brief ? `기록 요약:\n${brief}\n\n` : ''}선생님 메모:\n${String(text).slice(0, 1000)}` }], max_tokens: 800, temperature: 0.5 });
+      let out = typeof r === 'string' ? r : r?.response ?? r?.choices?.[0]?.message?.content ?? r?.result?.response;
+      out = String(out || '').replace(/<think>[\s\S]*?<\/think>/g, '').replace(/^["“']|["”']$/g, '').replace(/!+/g, '.').trim();
+      if (out.length < 10) throw new Error('AI 답이 비어 있어요');
+      return out.slice(0, 1000);
     } catch (e) { lastErr = e; }
   }
   throw lastErr || new Error('AI 호출 실패');
@@ -490,6 +519,67 @@ export function reportText(settings, facts, c) {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const MARK_COLOR = { '매우 잘함': '#cdeec0', '잘함': '#e3f5d6', '향상 중': '#d8e8ff', '반복 연습 필요': '#fff1b8', '개념 확인 필요': '#ffe3cc', '개별 지도 필요': '#ffd2b0', '복습 진행': '#e8dcff', '진도 보류': '#e6e6e6' };
 
+// ───────── 그래프 (서버에서 SVG로 그려서 넣어요 — 학부모 휴대폰에서 바로 보이게) ─────────
+const SERIES = ['#2a78d6', '#eb6834', '#1baf7a']; // 검증된 기본 팔레트 1~3번 (밝은 화면용)
+
+/** 시험 점수 추이: 지난 기간 + 이번 기간, 시험 종류별 선 (최대 3종류) */
+export function testChart(series, weeks) {
+  const pts = (series || []).filter((p) => p.pct != null);
+  if (pts.length < 2) return '';
+  const kindsAll = [...new Set(pts.map((p) => p.kind))];
+  const kinds = kindsAll.sort((a, b) => pts.filter((p) => p.kind === b).length - pts.filter((p) => p.kind === a).length).slice(0, 3);
+  const dates = [...new Set(pts.filter((p) => kinds.includes(p.kind)).map((p) => p.date))].sort();
+  if (dates.length < 2) return '';
+  // 휴대폰 화면 폭에 맞춘 크기 (글자가 작아지지 않게)
+  const W = 360, H = 200, L = 30, R = 74, T = 24, B = 26;
+  const minV = Math.min(...pts.filter((p) => kinds.includes(p.kind)).map((p) => p.pct));
+  const lo = Math.max(0, Math.min(50, Math.floor((minV - 10) / 10) * 10)); // 아래쪽을 잘라 변화가 잘 보이게
+  const x = (d) => L + (dates.indexOf(d) / (dates.length - 1)) * (W - L - R);
+  const y = (v) => T + (1 - (v - lo) / (100 - lo)) * (H - T - B);
+  const md = (d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`;
+  const firstCur = dates.find((d) => pts.some((p) => p.date === d && p.period === 'cur'));
+  const lastPrev = [...dates].reverse().find((d) => pts.some((p) => p.date === d && p.period === 'prev'));
+  let shade = '';
+  if (lastPrev && firstCur) {
+    const mid = (x(lastPrev) + x(firstCur)) / 2;
+    shade = `<rect x="${L}" y="${T}" width="${mid - L}" height="${H - T - B}" fill="#f3f2f8"/>
+      <text x="${(L + mid) / 2}" y="${T - 8}" text-anchor="middle" class="ax">${weeks === 2 ? '지난 2주' : '지난주'}</text>
+      <text x="${(mid + W - R) / 2}" y="${T - 8}" text-anchor="middle" class="ax">${weeks === 2 ? '이번 2주' : '이번 주'}</text>`;
+  }
+  const grid = [lo, Math.round((lo + 100) / 2), 100].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#e6e4ee" stroke-width="1"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" class="ax">${v}</text>`).join('');
+  const step = Math.ceil(dates.length / 5);
+  const xlab = dates.map((d, i) => (i % step === 0 || i === dates.length - 1)
+    ? `<text x="${x(d)}" y="${H - 8}" text-anchor="middle" class="ax">${md(d)}</text>` : '').join('');
+  const labels = [];
+  const lines = kinds.map((k, i) => {
+    const col = SERIES[i];
+    const ps = pts.filter((p) => p.kind === k).sort((a, b) => a.date.localeCompare(b.date));
+    // 같은 날 같은 시험이 여러 번이면 평균
+    const byDate = new Map();
+    for (const p of ps) { if (!byDate.has(p.date)) byDate.set(p.date, []); byDate.get(p.date).push(p.pct); }
+    const arr = [...byDate].map(([d, v]) => ({ d, v: Math.round(v.reduce((a, b) => a + b, 0) / v.length) }));
+    const path = arr.map((p, j) => `${j ? 'L' : 'M'}${x(p.d).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
+    const dots = arr.map((p) => `<circle cx="${x(p.d).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="4" fill="${col}" stroke="#fff" stroke-width="2"><title>${esc(k)} ${md(p.d)} · ${p.v}%</title></circle>`).join('');
+    const last = arr[arr.length - 1];
+    labels.push({ y: y(last.v), text: `${k} ${last.v}%`, col });
+    return `<path d="${path}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>${dots}`;
+  }).join('');
+  // 끝 라벨이 겹치지 않게 아래로 밀기
+  labels.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < labels.length; i++) if (labels[i].y - labels[i - 1].y < 14) labels[i].y = labels[i - 1].y + 14;
+  const endLabels = labels.map((l) => `<text x="${W - R + 8}" y="${l.y + 4}" class="lb">${esc(l.text)}</text>`).join('');
+  const legend = kinds.length >= 2 ? `<div class="legend">${kinds.map((k, i) => `<span><i style="background:${SERIES[i]}"></i>${esc(k)}</span>`).join('')}</div>` : '';
+  return `<div class="chart"><div class="ct">시험 점수 추이 <small>(맞은 비율 %)</small></div>${legend}
+<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="시험 점수 추이 그래프">${shade}${grid}${xlab}${lines}${endLabels}</svg></div>`;
+}
+
+/** 숙제 완료율: 지난 기간 vs 이번 기간 (같은 지표라 한 색, 지난 기간은 연하게) */
+export function homeworkChart(hw, weeks) {
+  if (!hw || hw.rate == null) return '';
+  const row = (label, v, faded) => `<div class="bar"><span class="bl">${label}</span><span class="bt"><span class="bf" style="width:${Math.max(2, v)}%;background:${SERIES[0]};opacity:${faded ? 0.4 : 1}"></span></span><span class="bv">${v}%</span></div>`;
+  return `<div class="chart"><div class="ct">숙제 완료율</div>${hw.prev_rate != null ? row(weeks === 2 ? '지난 2주' : '지난주', hw.prev_rate, true) : ''}${row(weeks === 2 ? '이번 2주' : '이번 주', hw.rate, false)}</div>`;
+}
+
 export function reportHtml(settings, r, facts, c, opts = {}) {
   const g = growthSettings(settings);
   const W = facts.period?.weeks || 1;
@@ -507,14 +597,14 @@ export function reportHtml(settings, r, facts, c, opts = {}) {
     ${(facts.retests || []).length ? `<div class="sub">재시험: ${facts.retests.map((x) => esc(`${dateShort(x.date)} ${x.text}`)).join(' / ')}</div>` : ''}` : '';
   const areas = (facts.areas || []).length ? `<div class="areas">${facts.areas.map((a) => `<div class="area"><div class="an">${esc(a.name)}${a.trend ? ` <small class="tr ${a.trend === '상승' ? 'up' : a.trend === '하락' ? 'down' : ''}">${esc(a.trend)}</small>` : ''}</div><div>${a.marks.map((m) => { const base = m.replace(/ \d+회$/, ''); return `<span class="mk" style="background:${MARK_COLOR[base] || '#eee'}">${esc(m)}</span>`; }).join('')}</div></div>`).join('')}</div>` : '';
   const hw = facts.homework || {};
-  const ach = `${p(c.overview)}${areas}<div class="chips">${hw.rate != null ? `<span class="chip">숙제 완료율 ${hw.rate}%${hw.prev_rate != null ? ` <small>(${prevWord(W)} ${hw.prev_rate}%)</small>` : ''}</span>` : ''}${facts.progress_rate != null ? `<span class="chip">계획 진도 달성 ${facts.progress_rate}%</span>` : ''}</div>`;
+  const ach = `${p(c.overview)}${homeworkChart(facts.homework, W)}${areas}<div class="chips">${hw.rate != null ? `<span class="chip">숙제 완료율 ${hw.rate}%${hw.prev_rate != null ? ` <small>(${prevWord(W)} ${hw.prev_rate}%)</small>` : ''}</span>` : ''}${facts.progress_rate != null ? `<span class="chip">계획 진도 달성 ${facts.progress_rate}%</span>` : ''}</div>`;
   const academy = `${c.academy_done.length ? `<h3>이번 기간 학원에서 지도한 내용</h3>${ul(c.academy_done)}` : ''}${c.academy_plan.length ? `<h3>앞으로 지도할 계획</h3>${ul(c.academy_plan)}` : ''}`;
   const photos = (facts.media || []).length ? `<div class="photos">${facts.media.map((t) => `<img src="/m/${esc(t)}" loading="lazy" alt="">`).join('')}</div>` : '';
   const badge = r.source === 'rule' ? '<div class="note">이번 리포트는 AI 없이 수업 기록만으로 정리했어요.</div>' : '';
   const body = [
     sec('학생 이름 및 학습 기간', head),
     sec(`이번 ${W === 2 ? '2주' : '주'} 학습 진도`, prog + p(c.concepts)),
-    sec(`이번 ${W === 2 ? '2주' : '주'} 시험 결과`, tests),
+    sec(`이번 ${W === 2 ? '2주' : '주'} 시험 결과`, tests ? testChart(facts.test_series, W) + tests : ''),
     sec('학습 성취도', ach),
     sec('우리 아이가 잘하고 있는 부분', ul(c.strengths), 'mint'),
     sec(`${prevWord(W)}보다 성장한 부분`, ul(c.growth), 'sky'),
@@ -549,6 +639,10 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 .note{background:#fff8e6;border-radius:10px;padding:8px 12px;font-size:13px;color:#7a6020;margin-bottom:10px}
 .tools{display:flex;gap:8px;justify-content:flex-end;margin-bottom:10px}.tools button{border:1px solid #dcd7ea;background:#fff;border-radius:999px;padding:7px 14px;font:inherit;font-size:13px;cursor:pointer}
 .foot{text-align:center;color:#9a9db0;font-size:12px;margin-top:20px}
+.chart{margin:6px 0 14px}.ct{font-size:13px;font-weight:700;color:#4b5068;margin-bottom:6px}.ct small{font-weight:500;color:#8a8ea0}
+.chart svg{width:100%;max-width:560px;height:auto;display:block}.chart .ax{font-size:10px;fill:#8a8ea0}.chart .lb{font-size:11px;font-weight:600;fill:#2b2a33}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:#52514e;margin-bottom:4px}.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.bar{display:grid;grid-template-columns:64px 1fr 44px;align-items:center;gap:8px;margin:6px 0;font-size:13px}.bl{color:#6b6f80}.bt{background:#f0eef6;border-radius:6px;height:14px;overflow:hidden}.bf{display:block;height:100%;border-radius:0 4px 4px 0}.bv{font-weight:700;text-align:right}
 @media print{body{background:#fff}.tools{display:none}main{padding:0}.sec{border-color:#e6e3ee}}
 </style></head><body><main>
 ${opts.noTools ? '' : '<div class="tools"><button onclick="window.print()">PDF 저장 · 인쇄</button></div>'}
