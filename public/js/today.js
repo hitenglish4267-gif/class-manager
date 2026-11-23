@@ -53,7 +53,7 @@ async function load() {
 }
 
 function makeModel(c) {
-  const m = { logs: {}, studs: {}, att: {}, on: null };
+  const m = { logs: {}, studs: {}, att: {}, on: null, son: {} };
   const logOf = (target, p) => ({
     target, curriculum_id: p.curriculum_id, lesson_id: p.lesson_id, seq: p.seq,
     today: p.today, next: p.next, homework: p.homework, repeat: p.repeat ? 1 : 0,
@@ -63,7 +63,10 @@ function makeModel(c) {
     for (const t of c.tracks) if (t.on) m.logs[t.target] = logOf(t.target, t.progress);
   } else if (c.type !== 'individual' && c.progress) m.logs[c.target] = logOf(c.target, c.progress);
   for (const s of c.students) {
-    if (c.type === 'individual' && s.progress) m.logs[s.target] = logOf(s.target, s.progress);
+    if (c.type === 'individual' && s.tracks) {
+      m.son[s.id] = new Set(s.tracks.filter((t) => t.on).map((t) => t.key));
+      for (const t of s.tracks) if (t.on) m.logs[t.target] = logOf(t.target, t.progress);
+    } else if (c.type === 'individual' && s.progress) m.logs[s.target] = logOf(s.target, s.progress);
     m.studs[s.id] = { hw: s.day.hw || '', comment: s.day.comment || '', tests: (s.tests || []).map((t) => ({ kind: t.kind, correct: t.correct ?? '', total: t.total ?? '', result: t.result || '', manual: false })) };
     m.att[s.id] = { att: s.day.att || '', reason: s.day.reason || '' };
   }
@@ -73,6 +76,14 @@ function makeModel(c) {
     if (Array.isArray(draft.body.tracks_on) && c.tracks) {
       m.on = new Set(draft.body.tracks_on);
       for (const t of c.tracks) if (!m.on.has(t.key)) delete m.logs[t.target];
+    }
+    if (draft.body.student_tracks && typeof draft.body.student_tracks === 'object') {
+      for (const s of c.students) {
+        const keys = draft.body.student_tracks[s.id];
+        if (!Array.isArray(keys) || !s.tracks) continue;
+        m.son[s.id] = new Set(keys);
+        for (const t of s.tracks) if (!m.son[s.id].has(t.key)) delete m.logs[t.target];
+      }
     }
     for (const l of draft.body.logs || []) m.logs[l.target] = { ...l };
     for (const s of draft.body.students || []) if (m.studs[s.id]) m.studs[s.id] = { hw: s.hw, comment: s.comment, tests: Array.isArray(s.tests) ? s.tests : m.studs[s.id].tests };
@@ -181,6 +192,7 @@ function recordBody(c) {
   return {
     date: S.date, class_id: c.id,
     tracks_on: m.on ? [...m.on] : undefined,
+    student_tracks: c.type === 'individual' ? Object.fromEntries(Object.entries(m.son).map(([k, v]) => [k, [...v]])) : undefined,
     logs: Object.values(m.logs),
     students: c.students.map((s) => ({ id: s.id, hw: m.studs[s.id].hw, comment: m.studs[s.id].comment, tests: m.studs[s.id].tests || [] })),
   };
@@ -201,36 +213,65 @@ function lessonAfter(curId, seq) {
 function oneLine(s) { return String(s || '').replace(/\s*\n+\s*/g, ' / ').trim(); }
 function todayText(l) { if (!l) return ''; const c = oneLine(l.content); return c ? `${l.title} · ${c}` : l.title || ''; }
 
-// 반에 진도표가 여러 개일 때: 오늘 한 진도표 고르기 (요일 바꿈·둘 다·추가 학습)
+// 진도표가 여러 개일 때: 오늘 한 진도표 고르기 (요일 바꿈·둘 다·추가 학습)
+// student 가 있으면 개별수업 학생 한 명의 교재들
 const DOW1 = ['일', '월', '화', '수', '목', '금', '토'];
-function tracksBlock(c) {
+function onSetOf(c, student) { const m = cards.get(c.id); return student ? (m.son[student.id] || (m.son[student.id] = new Set())) : m.on; }
+function tracksOf(c, student) { return student ? student.tracks : c.tracks; }
+function tracksBlock(c, student) {
   const m = cards.get(c.id);
-  const wrap = h('div');
-  const real = c.tracks.filter((t) => !t.free && t.curriculum_id);
+  const tracks = tracksOf(c, student);
+  const wrap = h('div', { class: student ? 'stu-tracks' : '' });
+  const real = tracks.filter((t) => !t.free && t.curriculum_id);
   function paint() {
+    const on = onSetOf(c, student);
     const kids = [];
     const chip = (t) => {
       const dayTxt = t.free ? '' : t.days ? ` (${t.days.split(',').map((d) => DOW1[Number(d)]).join('·')})` : '';
-      return h('button', { class: 'chip-btn' + (m.on.has(t.key) ? ' on' : ''), onclick: () => {
-        if (m.on.has(t.key)) { m.on.delete(t.key); delete m.logs[t.target]; }
+      return h('button', { class: 'chip-btn' + (on.has(t.key) ? ' on' : ''), onclick: () => {
+        if (on.has(t.key)) { on.delete(t.key); delete m.logs[t.target]; }
         else {
-          m.on.add(t.key);
+          on.add(t.key);
           const p = t.progress || {};
           m.logs[t.target] = { target: t.target, curriculum_id: p.curriculum_id ?? t.curriculum_id, lesson_id: p.lesson_id, seq: p.seq, today: p.today || '', next: p.next || '', homework: p.homework || '', repeat: p.repeat ? 1 : 0 };
         }
         dirty(c, 600); paint();
-      } }, t.free ? '+ 추가 학습 (영자신문 등)' : `${t.name || '진도표'}${dayTxt}`);
+      } }, t.free ? '+ 추가 학습 (영자신문 등)' : `${t.name || (student ? '교재 고르기' : '진도표')}${dayTxt}`);
     };
-    if (real.length > 1 || c.tracks.some((t) => t.free)) {
-      kids.push(h('div', { class: 'track-pick' }, h('span', { class: 'small', style: { fontWeight: 650 } }, '오늘 수업'), ...c.tracks.filter((t) => t.free || t.curriculum_id || t.key === 'm').map(chip)));
+    if (student || real.length > 1 || tracks.some((t) => t.free)) {
+      kids.push(h('div', { class: 'track-pick' }, h('span', { class: 'small', style: { fontWeight: 650 } }, student ? '오늘 한 교재' : '오늘 수업'),
+        ...tracks.filter((t) => t.free || t.curriculum_id || t.key === 'm').map(chip),
+        student ? addBookBtn(c, student) : null));
     }
-    const onTracks = c.tracks.filter((t) => m.on.has(t.key));
-    if (!onTracks.length) kids.push(h('div', { class: 'note small mt-s' }, '오늘 한 수업을 위에서 골라 주세요.'));
-    for (const t of onTracks) kids.push(progBlock(c, t.target, t.progress, null, t));
+    const onTracks = tracks.filter((t) => on.has(t.key));
+    if (!onTracks.length) kids.push(h('div', { class: 'note small mt-s' }, student ? '오늘 한 교재를 위에서 골라 주세요.' : '오늘 한 수업을 위에서 골라 주세요.'));
+    for (const t of onTracks) kids.push(progBlock(c, t.target, t.progress, student, t));
     wrap.replaceChildren(...kids);
   }
   paint();
   return wrap;
+}
+
+// 개별수업: 학생에게 교재 한 권 더 (예: 프리스텔라 + 블록블록 구문연습)
+function addBookBtn(c, student) {
+  const btn = h('button', { class: 'chip-btn add', onclick: () => {
+    const courseId = c.course_id || student.course_id;
+    const have = new Set(student.tracks.map((t) => t.curriculum_id).filter(Boolean));
+    const list = S.meta.curricula.filter((x) => !have.has(x.id));
+    const mine = list.filter((x) => !courseId || x.course_id === courseId);
+    const others = list.filter((x) => courseId && x.course_id !== courseId);
+    const sel = h('select', { class: 'input', style: { flex: '1 1 180px' }, onchange: async () => {
+      const id = Number(sel.value); if (!id) return;
+      sel.disabled = true;
+      await changeStudentCurriculum(c, student, id, 'new');
+    } }, h('option', { value: '' }, list.length ? '추가할 교재 고르기' : '추가할 진도표가 없어요'),
+      mine.length ? h('optgroup', { label: '이 과정' }, mine.map((x) => h('option', { value: x.id }, x.name))) : null,
+      others.length ? h('optgroup', { label: '다른 과정' }, others.map((x) => h('option', { value: x.id }, x.name))) : null);
+    btn.replaceWith(h('span', { class: 'row nowrap', style: { gap: '6px', flex: '1 1 220px' } }, sel,
+      h('button', { class: 'btn small ghost', onclick: (e) => { e.currentTarget.parentElement.replaceWith(addBookBtn(c, student)); } }, '취소')));
+    sel.focus();
+  } }, icon('plus'), '교재 추가');
+  return btn;
 }
 
 function progBlock(c, target, prog, student, track) {
@@ -241,7 +282,7 @@ function progBlock(c, target, prog, student, track) {
   const box = h('div', { class: student ? 'stu-prog' : 'prog' });
 
   const prev = prog && prog.prevHomework;
-  const firstOn = !track || c.tracks.find((t) => cards.get(c.id).on.has(t.key)) === track;
+  const firstOn = !track || tracksOf(c, student).find((t) => onSetOf(c, student).has(t.key)) === track;
   if (firstOn) {
     const pd = prog && prog.prevDate;
     if (prog && prog.prevToday) box.append(h('div', { class: 'lastx' }, `지난 수업${pd ? ` (${Number(pd.slice(5, 7))}/${Number(pd.slice(8, 10))})` : ''}: `, h('b', null, prog.prevToday)));
@@ -259,11 +300,18 @@ function progBlock(c, target, prog, student, track) {
   } }), '이번 차시 다시 (진도 못 나감)');
 
   const top = h('div', { class: 'prog-top' });
-  if (student) {
+  if (student && track && track.free) {
+    top.append(h('span', { class: 'chip line' }, '추가 학습 (직접 쓰기)'));
+  } else if (student) {
     const courseId = c.course_id || student.course_id;
+    const key = track ? track.key : 'm';
     const opts = S.meta.curricula.filter((x) => !courseId || x.course_id === courseId || x.id === curId);
-    top.append(h('select', { class: 'input', style: { flex: '1 1 160px' }, onchange: (e) => changeStudentCurriculum(c, student, Number(e.target.value) || null) },
-      h('option', { value: '' }, '진도표 고르기'),
+    top.append(h('select', { class: 'input', style: { flex: '1 1 160px' }, onchange: async (e) => {
+      const v = Number(e.target.value) || null;
+      if (!v && key !== 'm' && !(await confirmRemove(curOf(curId)))) { e.target.value = curId || ''; return; }
+      changeStudentCurriculum(c, student, v, key);
+    } },
+      h('option', { value: '' }, key === 'm' ? '진도표 고르기' : '— 이 교재 빼기'),
       opts.map((x) => h('option', { value: x.id, selected: x.id === curId }, x.name))));
   } else {
     const cur = curOf(curId);
@@ -301,19 +349,52 @@ function progBlock(c, target, prog, student, track) {
   box.append(h('div', { class: 'prog-grid mt-s' },
     h('label', { class: 'field' }, h('span', { class: 'lbl' }, '오늘 할 일'), today),
     h('label', { class: 'field' }, h('span', { class: 'lbl' }, '다음 수업'), next),
-    h('div', { class: 'field' }, h('span', { class: 'lbl' }, '오늘 숙제'), hw, qb)));
+    h('div', { class: 'field' }, h('span', { class: 'lbl' }, '오늘 숙제'), hw, qb,
+      student && c.students.length > 1 ? h('button', { class: 'btn small ghost mt-s', onclick: () => applyHomeworkToAll(c, student, track, log) }, '이 숙제를 다른 학생에게도 똑같이') : null)));
   return box;
 }
 function fmtSeq(n) { return Number.isInteger(n) ? n : Number(n).toFixed(1).replace(/\.0$/, ''); }
 
-async function changeStudentCurriculum(c, s, curId) {
+async function changeStudentCurriculum(c, s, curId, key = 'm') {
   await outbox.flush(recKey(c.id));
   const L = curId ? (D.lessons[curId] || []) : [];
-  await api('/api/student-curriculum', { student_id: s.id, curriculum_id: curId, start_seq: L.length ? L[0].seq : null, date: S.date });
-  const m = cards.get(c.id); delete m.logs[s.target];
+  try {
+    await api('/api/student-curriculum', { student_id: s.id, key, curriculum_id: curId, start_seq: L.length ? L[0].seq : null, remove: key !== 'm' && key !== 'new' && !curId, date: S.date });
+  } catch (e) { toast(e.message, true); return; }
+  const m = cards.get(c.id);
+  if (key !== 'new') delete m.logs[key === 'm' ? s.target : `${s.target}t${key}`];
   const o = outbox.get(recKey(c.id)); if (o) outbox.flush(recKey(c.id));
-  toast('진도표를 바꿨어요');
+  toast(key === 'new' ? '교재를 추가했어요' : !curId && key !== 'm' ? '교재를 뺐어요' : '진도표를 바꿨어요');
   load();
+}
+async function confirmRemove(cur) {
+  return window.confirm(`${cur ? cur.name : '이 교재'}를 이 학생 교재에서 뺄까요?\n지난 수업 기록은 그대로 남아요.`);
+}
+
+// 개별수업: 같은 교재(또는 추가 학습)를 하는 다른 학생에게 숙제를 똑같이 넣기
+function applyHomeworkToAll(c, from, track, log) {
+  const m = cards.get(c.id);
+  const text = String(log.homework || '').trim();
+  if (!text) { toast('먼저 숙제를 적어 주세요', true); return; }
+  let n = 0;
+  for (const s of c.students) {
+    if (s.id === from.id || !s.tracks) continue;
+    if (m.att[s.id] && m.att[s.id].att === 'absent') continue;
+    const t = track && track.free ? s.tracks.find((x) => x.free) : s.tracks.find((x) => !x.free && x.curriculum_id && x.curriculum_id === log.curriculum_id);
+    if (!t) continue;
+    const on = onSetOf(c, s);
+    if (!on.has(t.key)) {
+      if (!t.free) continue; // 오늘 안 한 교재엔 넣지 않기
+      on.add(t.key);
+    }
+    const p = t.progress || {};
+    const L = m.logs[t.target] || (m.logs[t.target] = { target: t.target, curriculum_id: p.curriculum_id ?? t.curriculum_id, lesson_id: p.lesson_id, seq: p.seq, today: p.today || '', next: p.next || '', homework: '', repeat: p.repeat ? 1 : 0 });
+    L.homework = text; n++;
+  }
+  if (!n) { toast('오늘 같은 교재를 한 다른 학생이 없어요'); return; }
+  dirty(c, 600);
+  const el = $(`#cls-${c.id}`); if (el) el.replaceWith(classCard(c));
+  toast(`${n}명에게 같은 숙제를 넣었어요`);
 }
 
 // ───────── 학생 줄 ─────────
@@ -364,7 +445,7 @@ function studentRow(c, s) {
     h('button', { class: 'btn small ghost', onclick: () => { comment.classList.toggle('hidden'); if (!comment.classList.contains('hidden')) comment.focus(); } }, icon('pen'), '선생님 한마디'),
     mediaBtn, linkBtn));
   row.append(comment);
-  if (c.type === 'individual') row.append(progBlock(c, s.target, s.progress, s));
+  if (c.type === 'individual') row.append(s.tracks ? tracksBlock(c, s) : progBlock(c, s.target, s.progress, s));
   paintAtt(); paintHw();
   return row;
 }

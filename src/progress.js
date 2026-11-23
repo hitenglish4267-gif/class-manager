@@ -103,7 +103,7 @@ export function parseTracks(raw) {
     key: String(t.key), curriculum_id: Number(t.curriculum_id), start_seq: t.start_seq === '' || t.start_seq == null ? null : Number(t.start_seq), days: String(t.days || ''),
   }));
 }
-export function trackTarget(classId, key) { return key === 'm' ? `c${classId}` : `c${classId}t${key}`; }
+export function trackTarget(classId, key, prefix = 'c') { return key === 'm' ? `${prefix}${classId}` : `${prefix}${classId}t${key}`; }
 export function classTracks(cls) {
   return [
     { key: 'm', curriculum_id: cls.curriculum_id || null, start_seq: cls.start_seq, days: String(cls.cur_days || '') },
@@ -111,6 +111,16 @@ export function classTracks(cls) {
     { key: 'x', curriculum_id: null, start_seq: null, days: '-', free: true },
   ].map((t) => ({ ...t, target: trackTarget(cls.id, t.key) }));
 }
+// 개별수업 학생 한 명의 교재들: 기본(m) = students.curriculum_id, 추가 = students.tracks JSON
+export function studentTracks(st) {
+  return [
+    { key: 'm', curriculum_id: st.curriculum_id || null, start_seq: st.start_seq, days: String(st.cur_days || '') },
+    ...parseTracks(st.tracks),
+    { key: 'x', curriculum_id: null, start_seq: null, days: '-', free: true },
+  ].map((t) => ({ ...t, target: trackTarget(st.id, t.key, 's') }));
+}
+/** 오늘 기록 target 이 어느 진도표(key)인지: c12 → m, c12t2 → 2, s5tx → x */
+export function keyOfTarget(target) { const m = String(target).match(/^[cs]\d+(?:t(\d+|x))?$/); return m ? (m[1] || 'm') : null; }
 export function trackOnDefault(t, dow) {
   if (t.free) return false;
   if (!t.days) return true;

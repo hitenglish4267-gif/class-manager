@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, kind T
 CREATE UNIQUE INDEX IF NOT EXISTS reports_uk ON reports(kind, ref, student_id);
 CREATE UNIQUE INDEX IF NOT EXISTS reports_token ON reports(token);
 CREATE TABLE IF NOT EXISTS track_days (date TEXT, class_id INTEGER, keys TEXT, updated_at TEXT, PRIMARY KEY(date, class_id));
+CREATE TABLE IF NOT EXISTS stu_track_days (date TEXT, student_id INTEGER, keys TEXT, updated_at TEXT, PRIMARY KEY(date, student_id));
 CREATE TABLE IF NOT EXISTS works (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT, student_id INTEGER, date TEXT, r2key TEXT, mime TEXT, size INTEGER, type TEXT DEFAULT 'writing', memo TEXT DEFAULT '', comment TEXT DEFAULT '', ai TEXT DEFAULT '', include INTEGER DEFAULT 1, status TEXT DEFAULT 'new', error TEXT DEFAULT '', model TEXT DEFAULT '', teacher_id INTEGER, created_at TEXT, updated_at TEXT);
 CREATE INDEX IF NOT EXISTS works_student ON works(student_id, date);
 CREATE UNIQUE INDEX IF NOT EXISTS works_token ON works(token);
@@ -43,6 +44,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS works_token ON works(token);
 const MIGRATIONS = [
   "ALTER TABLE classes ADD COLUMN cur_days TEXT DEFAULT ''",
   "ALTER TABLE classes ADD COLUMN tracks TEXT DEFAULT ''",
+  // 개별수업 학생 한 명에 교재 여러 권
+  "ALTER TABLE students ADD COLUMN tracks TEXT DEFAULT ''",
+  "ALTER TABLE students ADD COLUMN cur_days TEXT DEFAULT ''",
 ];
 
 let ready = false;

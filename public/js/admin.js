@@ -160,7 +160,7 @@ function dayPicker(set) {
   return h('div', { class: 'pick' }, [1, 2, 3, 4, 5, 6, 0].map((d) => h('button', { class: 'ok', 'aria-pressed': String(set.has(String(d))), style: { minWidth: '40px' }, onclick: (e) => { set.has(String(d)) ? set.delete(String(d)) : set.add(String(d)); e.currentTarget.setAttribute('aria-pressed', String(set.has(String(d)))); } }, DOW_KO[d])));
 }
 // 추가 진도표 한 줄: 진도표(모든 과정) + 시작 차시 + 요일
-function trackRow(t, onRemove) {
+function trackRow(t, onRemove, label = '추가 진도표') {
   const cur = h('select', { class: 'input' }, h('option', { value: '' }, '진도표 고르기'),
     S.meta.courses.map((co) => { const list = S.meta.curricula.filter((x) => x.course_id === co.id); return list.length ? h('optgroup', { label: co.name }, list.map((x) => h('option', { value: x.id, selected: x.id === t.curriculum_id }, x.name))) : null; }),
     (() => { const list = S.meta.curricula.filter((x) => !S.meta.courses.some((co) => co.id === x.course_id)); return list.length ? h('optgroup', { label: '과정 없음' }, list.map((x) => h('option', { value: x.id, selected: x.id === t.curriculum_id }, x.name))) : null; })());
@@ -173,9 +173,9 @@ function trackRow(t, onRemove) {
   cur.addEventListener('change', () => { t.start_seq = null; fillStart(); });
   fillStart();
   const el = h('div', { class: 'card card-pad', style: { boxShadow: 'none' } },
-    h('div', { class: 'grid2' }, field('추가 진도표', cur), field('몇 차시부터 시작', start)),
-    field('이 진도표 요일', dayPicker(days)),
-    h('button', { class: 'btn small ghost danger mt-s', onclick: () => { el.remove(); onRemove(); } }, '이 진도표 빼기'));
+    h('div', { class: 'grid2' }, field(label, cur), field('몇 차시부터 시작', start)),
+    field(`이 ${label === '추가 진도표' ? '진도표' : '교재'} 요일${label === '추가 진도표' ? '' : ' (안 고르면 수업하는 모든 요일)'}`, dayPicker(days)),
+    h('button', { class: 'btn small ghost danger mt-s', onclick: () => { el.remove(); onRemove(); } }, label === '추가 진도표' ? '이 진도표 빼기' : '이 교재 빼기'));
   el.read = () => ({ key: t.key, curriculum_id: Number(cur.value) || null, start_seq: start.value !== '' ? Number(start.value) : null, days: [...days].sort().join(',') });
   return el;
 }
@@ -209,7 +209,7 @@ function editClass(c, draw) {
       tracksList,
       h('button', { class: 'btn small', onclick: () => addRow({ key: nextKey(), curriculum_id: null, start_seq: null, days: '' }) }, icon('plus'), '진도표 하나 더 (예: 화·금 영어홀릭)'),
       h('div', { class: 'tiny muted' }, '요일마다 다른 교재를 하면 진도표를 더 넣으세요. 진도는 진도표마다 따로 이어져요. 선생님이 오늘 수업 화면에서 그날 한 진도표를 바꾸거나 둘 다 고를 수 있어요.'));
-    const indNote = h('div', { class: 'note small' + (type === 'individual' ? '' : ' hidden') }, '개별수업은 학생마다 진도표를 따로 지정해요 (학생 설정이나 오늘 수업 화면에서).');
+    const indNote = h('div', { class: 'note small' + (type === 'individual' ? '' : ' hidden') }, '개별수업은 학생마다 교재(진도표)를 따로 지정해요. 한 학생이 교재 여러 권을 해도 돼요 (학생 설정이나 오늘 수업 화면에서).');
     return h('div', { class: 'stack' },
       field('반 이름', name), typeSeg,
       field('수업 요일', dayBox),
@@ -264,7 +264,16 @@ function editStudent(s, draw) {
     const cls = h('select', { class: 'input' }, h('option', { value: '' }, '반 고르기'), A.classes.map((c) => h('option', { value: c.id, selected: c.id === s.class_id }, `${c.name}${c.type === 'individual' ? ' (개별)' : ''}`)));
     const course = h('select', { class: 'input' }, h('option', { value: '' }, '과정 고르기'), S.meta.courses.map((x) => h('option', { value: x.id, selected: x.id === s.course_id }, x.name)));
     const picker = curriculumPicker(course, s.curriculum_id, s.start_seq);
-    const indBox = h('div', { class: 'stack' }, h('div', { class: 'note small' }, '개별수업 학생의 진도표예요. 과정을 먼저 고르면 그 과정 진도표만 보여요.'), h('div', { class: 'grid3' }, field('과정', course), field('진도표', picker.cur), field('시작 차시', picker.start)));
+    let extra = []; try { extra = JSON.parse(s.tracks || '[]') || []; } catch { extra = []; }
+    const bookRows = [];
+    const bookList = h('div', { class: 'stack' });
+    const addBook = (t) => { const r = trackRow(t, () => { bookRows.splice(bookRows.indexOf(r), 1); }, '추가 교재'); bookRows.push(r); bookList.append(r); };
+    extra.forEach(addBook);
+    const nextBookKey = () => String(Math.max(1, ...bookRows.map((r) => Number(r.read().key) || 1)) + 1);
+    const indBox = h('div', { class: 'stack' }, h('div', { class: 'note small' }, '개별수업 학생의 교재(진도표)예요. 과정을 먼저 고르면 그 과정 진도표만 보여요.'), h('div', { class: 'grid3' }, field('과정', course), field('기본 교재', picker.cur), field('시작 차시', picker.start)),
+      bookList,
+      h('button', { class: 'btn small', onclick: () => addBook({ key: nextBookKey(), curriculum_id: null, start_seq: null, days: '' }) }, icon('plus'), '교재 하나 더 (예: 블록블록 구문연습)'),
+      h('div', { class: 'tiny muted' }, '교재마다 진도가 따로 이어져요. 요일을 안 고르면 수업 날마다 켜져 있고, 선생님이 오늘 수업 화면에서 그날 한 교재만 고를 수 있어요.'));
     const paintInd = () => { const c = A.classes.find((x) => x.id === Number(cls.value)); indBox.classList.toggle('hidden', !(c && c.type === 'individual')); if (c && !course.value && c.course_id) { course.value = c.course_id; course.dispatchEvent(new Event('change')); } };
     cls.addEventListener('change', paintInd); paintInd();
     const style = h('select', { class: 'input' }, [['', '전체 설정 따름'], ['basic', '알림톡 기본형'], ['cushion', '알림톡 쿠션멘트형']].map(([v, l]) => h('option', { value: v, selected: s.msg_style === v }, l)));
@@ -280,10 +289,12 @@ function editStudent(s, draw) {
         h('button', { class: 'btn primary', style: { marginLeft: 'auto' }, onclick: async () => {
           const c = A.classes.find((x) => x.id === Number(cls.value));
           const ind = c && c.type === 'individual';
-          const body = { id: s.id, name: name.value, phone: phone.value, class_id: Number(cls.value) || null, course_id: Number(course.value) || (c ? c.course_id : null), curriculum_id: ind ? Number(picker.cur.value) || null : s.curriculum_id, start_seq: ind && picker.start.value !== '' ? Number(picker.start.value) : (ind ? null : s.start_seq), msg_style: style.value };
+          const body = { id: s.id, name: name.value, phone: phone.value, class_id: Number(cls.value) || null, course_id: Number(course.value) || (c ? c.course_id : null), curriculum_id: ind ? Number(picker.cur.value) || null : s.curriculum_id, start_seq: ind && picker.start.value !== '' ? Number(picker.start.value) : (ind ? null : s.start_seq), msg_style: style.value,
+            ...(ind ? { tracks: bookRows.map((r) => r.read()).filter((t) => t.curriculum_id) } : {}) };
           try {
             const r = await api('/api/admin/student', body);
             body.phone = String(phone.value).replace(/\D/g, '');
+            if (Array.isArray(body.tracks)) body.tracks = JSON.stringify(body.tracks);
             if (isNew) A.students.push({ ...body, id: r.id }); else Object.assign(s, body);
             A.students.sort((a, b) => a.name.localeCompare(b.name, 'ko'));
             draw(); close(); toast('저장했어요');

@@ -77,8 +77,7 @@ const prevWord = (w) => (w === 2 ? '지난 2주' : '지난주');
 function targetFor(classType, classId, studentId) { return classType === 'individual' ? `s${studentId}` : `c${classId}`; }
 /** 그날 그 학생의 진도 기록들 (반에 진도표가 여러 개면 여러 개) */
 function logsOf(cur, date, s, classId) {
-  if (s.class_type === 'individual') { const l = cur.logs.get(`${date}|s${s.id}`); return l ? [l] : []; }
-  return cur.classLogs.get(`${date}|${classId}`) || [];
+  return cur.classLogs.get(`${date}|${targetFor(s.class_type, classId, s.id)}`) || [];
 }
 const pct = (c, t) => (t ? Math.round((c / t) * 100) : null);
 const fmt = (n) => (n == null || n === '' ? '' : String(+Number(n).toFixed(1)));
@@ -86,9 +85,9 @@ const fmt = (n) => (n == null || n === '' ? '' : String(+Number(n).toFixed(1)));
 function byClassDay(logs) {
   const m = new Map();
   for (const l of logs) {
-    const g = String(l.target).match(/^c(\d+)(?:t(\d+|x))?$/);
+    const g = String(l.target).match(/^([cs]\d+)(?:t(\d+|x))?$/);
     if (!g) continue;
-    const k = `${l.date}|${g[1]}`;
+    const k = `${l.date}|${g[1]}`; // c12 = 반, s5 = 개별수업 학생
     if (!m.has(k)) m.set(k, []);
     m.get(k).push(l);
   }

@@ -67,7 +67,7 @@ async function materializeLogs(env, date) {
   };
   const came = (s) => s.day.att === 'present' || s.day.att === 'late';
   for (const c of ctx.classes) {
-    if (c.type === 'individual') { for (const s of c.students) if (came(s)) add(s.target, c.id, s.progress); }
+    if (c.type === 'individual') { for (const s of c.students) if (came(s)) for (const t of s.tracks || []) if (t.on && !t.free) add(t.target, c.id, t.progress); }
     else if (c.students.some(came)) for (const t of c.tracks || []) if (t.on && !t.free) add(t.target, c.id, t.progress);
   }
   for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
