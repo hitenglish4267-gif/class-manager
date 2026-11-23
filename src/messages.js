@@ -429,6 +429,15 @@ export async function attendanceAlert(env, studentId, date, att) {
   for (const c of ctx.classes) for (const s of c.students) if (s.id === studentId) { cls = c; st = s; }
   if (!st) return;
   const vars = dailyVars(settings, env, cls, st, date);
+  // 안전장치: 출석·결석 알림에 "지각" 문구 템플릿이 걸려 있으면 절대 보내지 않기
+  if (att !== 'late') {
+    const t = chooseKakao(settings, 'att', st.msg_style || settings.kakao.style || 'basic');
+    if (t && /지각/.test(t.text || '')) {
+      await env.DB.prepare('UPDATE att_alerts SET status = ?, sent_at = ?, error = ? WHERE date = ? AND student_id = ?')
+        .bind('failed', kstNow().stamp, '출결 알림 칸에 지각 템플릿이 들어 있어 보내지 않았어요', date, studentId).run();
+      return;
+    }
+  }
   // 지각은 "지각 즉시 알림" 템플릿이 있으면 그걸로 (수업 시작·등원 시각·지각 분 안내), 없으면 출결 알림으로
   const kind = att === 'late' && chooseKakao(settings, 'late', 'basic') ? 'late' : 'att';
   const text = renderTemplate(settings.sms_templates[kind] || settings.sms_templates.att, vars, 'sms');
