@@ -53,12 +53,15 @@ async function load() {
 }
 
 function makeModel(c) {
-  const m = { logs: {}, studs: {}, att: {} };
+  const m = { logs: {}, studs: {}, att: {}, on: null };
   const logOf = (target, p) => ({
     target, curriculum_id: p.curriculum_id, lesson_id: p.lesson_id, seq: p.seq,
     today: p.today, next: p.next, homework: p.homework, repeat: p.repeat ? 1 : 0,
   });
-  if (c.type !== 'individual' && c.progress) m.logs[c.target] = logOf(c.target, c.progress);
+  if (c.type !== 'individual' && c.tracks) {
+    m.on = new Set(c.tracks.filter((t) => t.on).map((t) => t.key));
+    for (const t of c.tracks) if (t.on) m.logs[t.target] = logOf(t.target, t.progress);
+  } else if (c.type !== 'individual' && c.progress) m.logs[c.target] = logOf(c.target, c.progress);
   for (const s of c.students) {
     if (c.type === 'individual' && s.progress) m.logs[s.target] = logOf(s.target, s.progress);
     m.studs[s.id] = { hw: s.day.hw || '', comment: s.day.comment || '', tests: (s.tests || []).map((t) => ({ kind: t.kind, correct: t.correct ?? '', total: t.total ?? '', result: t.result || '', manual: false })) };
@@ -67,6 +70,10 @@ function makeModel(c) {
   // 이 기기에 보관된(아직 서버에 못 간) 입력이 있으면 그걸로 복구
   const draft = outbox.get(recKey(c.id));
   if (draft) {
+    if (Array.isArray(draft.body.tracks_on) && c.tracks) {
+      m.on = new Set(draft.body.tracks_on);
+      for (const t of c.tracks) if (!m.on.has(t.key)) delete m.logs[t.target];
+    }
     for (const l of draft.body.logs || []) m.logs[l.target] = { ...l };
     for (const s of draft.body.students || []) if (m.studs[s.id]) m.studs[s.id] = { hw: s.hw, comment: s.comment, tests: Array.isArray(s.tests) ? s.tests : m.studs[s.id].tests };
   }
@@ -141,7 +148,8 @@ function classCard(c) {
       h('div', { class: 'sub' }, [c.time, c.room, S.me.role === 'director' ? c.teacher_name : '', `${c.students.length}명`].filter(Boolean).join(' · '))),
     sum, h('span', { class: 'chev' }, icon('down')));
   const body = h('div', { class: 'cls-body' });
-  if (c.type !== 'individual') body.append(progBlock(c, c.target, c.progress, null));
+  if (c.type !== 'individual' && c.tracks) body.append(tracksBlock(c));
+  else if (c.type !== 'individual') body.append(progBlock(c, c.target, c.progress, null));
   body.append(h('div', { class: 'cls-actions' },
     h('button', { class: 'btn', onclick: () => allPresent(c) }, icon('check'), '모두 출석'),
     h('button', { class: 'btn', onclick: () => allHwDone(c) }, '모두 숙제 완료')));
@@ -172,6 +180,7 @@ function recordBody(c) {
   const m = cards.get(c.id);
   return {
     date: S.date, class_id: c.id,
+    tracks_on: m.on ? [...m.on] : undefined,
     logs: Object.values(m.logs),
     students: c.students.map((s) => ({ id: s.id, hw: m.studs[s.id].hw, comment: m.studs[s.id].comment, tests: m.studs[s.id].tests || [] })),
   };
@@ -192,7 +201,39 @@ function lessonAfter(curId, seq) {
 function oneLine(s) { return String(s || '').replace(/\s*\n+\s*/g, ' / ').trim(); }
 function todayText(l) { if (!l) return ''; const c = oneLine(l.content); return c ? `${l.title} · ${c}` : l.title || ''; }
 
-function progBlock(c, target, prog, student) {
+// 반에 진도표가 여러 개일 때: 오늘 한 진도표 고르기 (요일 바꿈·둘 다·추가 학습)
+const DOW1 = ['일', '월', '화', '수', '목', '금', '토'];
+function tracksBlock(c) {
+  const m = cards.get(c.id);
+  const wrap = h('div');
+  const real = c.tracks.filter((t) => !t.free && t.curriculum_id);
+  function paint() {
+    const kids = [];
+    const chip = (t) => {
+      const dayTxt = t.free ? '' : t.days ? ` (${t.days.split(',').map((d) => DOW1[Number(d)]).join('·')})` : '';
+      return h('button', { class: 'chip-btn' + (m.on.has(t.key) ? ' on' : ''), onclick: () => {
+        if (m.on.has(t.key)) { m.on.delete(t.key); delete m.logs[t.target]; }
+        else {
+          m.on.add(t.key);
+          const p = t.progress || {};
+          m.logs[t.target] = { target: t.target, curriculum_id: p.curriculum_id ?? t.curriculum_id, lesson_id: p.lesson_id, seq: p.seq, today: p.today || '', next: p.next || '', homework: p.homework || '', repeat: p.repeat ? 1 : 0 };
+        }
+        dirty(c, 600); paint();
+      } }, t.free ? '+ 추가 학습 (영자신문 등)' : `${t.name || '진도표'}${dayTxt}`);
+    };
+    if (real.length > 1 || c.tracks.some((t) => t.free)) {
+      kids.push(h('div', { class: 'track-pick' }, h('span', { class: 'small', style: { fontWeight: 650 } }, '오늘 수업'), ...c.tracks.filter((t) => t.free || t.curriculum_id || t.key === 'm').map(chip)));
+    }
+    const onTracks = c.tracks.filter((t) => m.on.has(t.key));
+    if (!onTracks.length) kids.push(h('div', { class: 'note small mt-s' }, '오늘 한 수업을 위에서 골라 주세요.'));
+    for (const t of onTracks) kids.push(progBlock(c, t.target, t.progress, null, t));
+    wrap.replaceChildren(...kids);
+  }
+  paint();
+  return wrap;
+}
+
+function progBlock(c, target, prog, student, track) {
   const m = cards.get(c.id);
   const log = m.logs[target] || (m.logs[target] = { target, curriculum_id: null, lesson_id: null, seq: null, today: '', next: '', homework: '', repeat: 0 });
   const curId = log.curriculum_id;
@@ -200,7 +241,8 @@ function progBlock(c, target, prog, student) {
   const box = h('div', { class: student ? 'stu-prog' : 'prog' });
 
   const prev = prog && prog.prevHomework;
-  box.append(h('div', { class: 'lastx' }, '지난 숙제: ', h('b', null, prev || '없음')));
+  const firstOn = !track || c.tracks.find((t) => cards.get(c.id).on.has(t.key)) === track;
+  if (firstOn) box.append(h('div', { class: 'lastx' }, '지난 숙제: ', h('b', null, prev || '없음')));
 
   const today = h('textarea', { class: 'input', rows: 2, value: log.today, placeholder: '오늘 할 일', oninput: () => { log.today = today.value; dirty(c); } });
   const next = h('input', { class: 'input', value: log.next, placeholder: '다음 수업', oninput: () => { log.next = next.value; dirty(c); } });
@@ -221,7 +263,7 @@ function progBlock(c, target, prog, student) {
       opts.map((x) => h('option', { value: x.id, selected: x.id === curId }, x.name))));
   } else {
     const cur = curOf(curId);
-    top.append(h('span', { class: 'chip line' }, cur ? cur.name : '진도표 없음'));
+    top.append(h('span', { class: 'chip line' }, track && track.free ? '추가 학습 (직접 쓰기)' : cur ? cur.name : '진도표 없음'));
   }
   if (L.length) {
     const sel = h('select', { class: 'input', onchange: () => {
@@ -236,8 +278,8 @@ function progBlock(c, target, prog, student) {
   }
   box.append(top);
   if (prog && prog.ended) box.append(h('div', { class: 'note warn mt-s' }, '진도표의 마지막 차시까지 끝났어요. (순환이 꺼져 있어요)'));
-  if (!curId && !student) box.append(h('div', { class: 'note mt-s small' }, S.me.role === 'director' ? '관리 → 반에서 진도표를 지정하면 자동으로 채워져요. 지금은 직접 적어도 돼요.' : '원장님이 진도표를 지정하면 자동으로 채워져요. 지금은 직접 적어도 돼요.'));
-  box.append(h('div', { class: 'mt-s' }, repeat));
+  if (!curId && !student && !(track && track.free)) box.append(h('div', { class: 'note mt-s small' }, S.me.role === 'director' ? '관리 → 반에서 진도표를 지정하면 자동으로 채워져요. 지금은 직접 적어도 돼요.' : '원장님이 진도표를 지정하면 자동으로 채워져요. 지금은 직접 적어도 돼요.'));
+  if (!(track && track.free)) box.append(h('div', { class: 'mt-s' }, repeat));
 
   const qb = h('div', { class: 'qb' });
   function tokens() { return String(log.homework || '').split(/\s*[,\n]\s*/).filter(Boolean); }

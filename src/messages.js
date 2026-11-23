@@ -158,9 +158,8 @@ async function periodVars(env, settings, kind, ref) {
     const rate = total ? Math.round((cnt.done / total) * 100) : null;
     const lessonLogs = [];
     for (const r of attended) {
-      const t = classType.get(r.class_id) === 'individual' ? `s${s.id}` : `c${r.class_id}`;
-      const l = logMap.get(`${r.date}|${t}`);
-      if (l) lessonLogs.push(l);
+      if (classType.get(r.class_id) === 'individual') { const l = logMap.get(`${r.date}|s${s.id}`); if (l) lessonLogs.push(l); }
+      else for (const l of logs) if (l.date === r.date && (l.target === `c${r.class_id}` || l.target.startsWith(`c${r.class_id}t`))) lessonLogs.push(l);
     }
     const titles = lessonLogs.map((l) => String(l.today || '').split(' · ')[0]).filter(Boolean);
     const uniq = [...new Set(titles)];
@@ -239,8 +238,9 @@ async function hw5Items(env, settings, ref) {
       const lines = [];
       for (const r of recent) {
         const target = r.class_type === 'individual' ? `s${st.id}` : `c${r.class_id}`;
-        const log = await first(env, 'SELECT homework FROM logs WHERE target = ? AND date < ? ORDER BY date DESC LIMIT 1', target, r.date);
-        const hwName = oneLine((log && log.homework) || '') || '숙제';
+        const prevDay = await first(env, "SELECT MAX(date) AS d FROM logs WHERE (target = ? OR target LIKE ?) AND date < ?", target, `${target}t%`, r.date);
+        const hwLogs = prevDay && prevDay.d ? await all(env, "SELECT homework FROM logs WHERE (target = ? OR target LIKE ?) AND date = ?", target, `${target}t%`, prevDay.d) : [];
+        const hwName = hwLogs.map((l) => oneLine(l.homework || '')).filter(Boolean).join(' / ') || '숙제';
         lines.push(`- ${dateShort(r.date)} ${hwName}: ${HW_LABEL[r.hw]}`);
       }
       const vars = {

@@ -351,3 +351,6 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-
 .work-grid { display: grid; grid-template-columns: 120px 1fr; gap: 12px; align-items: start; }
 .work-img { width: 100%; border-radius: 10px; display: block; background: var(--sunken); }
 @media (max-width: 520px) { .work-grid { grid-template-columns: 1fr; } .work-img { max-height: 260px; object-fit: contain; } }
+/* 반 하나에 진도표 여러 개 */
+.track-pick { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 14px 0; }
+.track-pick + .prog, .prog + .prog { margin-top: 8px; }
