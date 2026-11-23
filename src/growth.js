@@ -75,9 +75,26 @@ const prevWord = (w) => (w === 2 ? '지난 2주' : '지난주');
 
 // ───────── 한 주 사실 모으기 ─────────
 function targetFor(classType, classId, studentId) { return classType === 'individual' ? `s${studentId}` : `c${classId}`; }
+/** 그날 그 학생의 진도 기록들 (반에 진도표가 여러 개면 여러 개) */
+function logsOf(cur, date, s, classId) {
+  if (s.class_type === 'individual') { const l = cur.logs.get(`${date}|s${s.id}`); return l ? [l] : []; }
+  return cur.classLogs.get(`${date}|${classId}`) || [];
+}
 const pct = (c, t) => (t ? Math.round((c / t) * 100) : null);
 const fmt = (n) => (n == null || n === '' ? '' : String(+Number(n).toFixed(1)));
 
+function byClassDay(logs) {
+  const m = new Map();
+  for (const l of logs) {
+    const g = String(l.target).match(/^c(\d+)(?:t(\d+|x))?$/);
+    if (!g) continue;
+    const k = `${l.date}|${g[1]}`;
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(l);
+  }
+  for (const arr of m.values()) arr.sort((a, b) => (a.target.length - b.target.length) || a.target.localeCompare(b.target)); // 기본 진도표 먼저
+  return m;
+}
 async function rangeData(env, from, to) {
   const [days, tests, evals, notes, logs, media, works] = await Promise.all([
     all(env, 'SELECT * FROM days WHERE date >= ? AND date <= ? ORDER BY date', from, to),
@@ -89,7 +106,7 @@ async function rangeData(env, from, to) {
     all(env, "SELECT student_id, date, type, comment FROM works WHERE date >= ? AND date <= ? AND include = 1 AND comment != '' ORDER BY date, id", from, to).catch(() => []),
   ]);
   const by = (rows, key = 'student_id') => { const m = new Map(); for (const r of rows) { if (!m.has(r[key])) m.set(r[key], []); m.get(r[key]).push(r); } return m; };
-  return { days: by(days), tests: by(tests), evals: by(evals), notes: by(notes), media: by(media), works: by(works), logs: new Map(logs.map((l) => [`${l.date}|${l.target}`, l])) };
+  return { days: by(days), tests: by(tests), evals: by(evals), notes: by(notes), media: by(media), works: by(works), logs: new Map(logs.map((l) => [`${l.date}|${l.target}`, l])), classLogs: byClassDay(logs) };
 }
 
 function evalSummary(rows, itemName) {
@@ -138,17 +155,25 @@ export function buildFacts(settings, s, cur, prev, period) {
   const progress = [];
   for (const d of days) {
     if (!(d.att === 'present' || d.att === 'late')) continue;
-    const log = cur.logs.get(`${d.date}|${targetFor(s.class_type, d.class_id, s.id)}`);
+    const dayLogs = logsOf(cur, d.date, s, d.class_id);
     const n = notes.get(d.date) || {};
-    if (!log && !n.done) continue;
-    const planned = log ? oneLine(log.today) : '';
-    progress.push({ date: d.date, book: log ? log.book || '' : '', planned, done: n.done || planned, changed: !!(n.done && planned && n.done !== planned), homework: log ? oneLine(log.homework) : '' });
+    if (!dayLogs.length && !n.done) continue;
+    if (dayLogs.length > 1 && !n.done) {
+      for (const log of dayLogs) { const planned = oneLine(log.today); if (planned) progress.push({ date: d.date, book: log.book || (log.target.endsWith('tx') ? '추가 학습' : ''), planned, done: planned, changed: false, homework: oneLine(log.homework) }); }
+      continue;
+    }
+    const log = dayLogs[0];
+    const planned = dayLogs.map((l) => oneLine(l.today)).filter(Boolean).join(' / ');
+    progress.push({ date: d.date, book: dayLogs.map((l) => l.book || (l.target.endsWith('tx') ? '추가 학습' : '')).filter(Boolean).join(', '), planned, done: n.done || planned, changed: !!(n.done && planned && n.done !== planned), homework: dayLogs.map((l) => oneLine(l.homework)).filter(Boolean).join(' / ') || (log ? '' : '') });
   }
   for (const n of notes.values()) if (n.done && !progress.some((p) => p.date === n.date)) progress.push({ date: n.date, book: '', planned: '', done: n.done, changed: false, homework: '' });
   progress.sort((a, b) => a.date.localeCompare(b.date));
   const lastNote = [...notes.values()].filter((n) => n.next_plan).pop();
-  const lastLog = [...days].reverse().map((d) => cur.logs.get(`${d.date}|${targetFor(s.class_type, d.class_id, s.id)}`)).find(Boolean);
-  const nextPlan = lastNote ? lastNote.next_plan : lastLog ? (lastLog.repeat ? oneLine(lastLog.today) : oneLine(lastLog.next)) : '';
+  // 진도표마다 가장 최근 기록의 다음 차시
+  const latest = new Map();
+  for (const d of days) for (const l of logsOf(cur, d.date, s, d.class_id)) if (!l.target.endsWith('tx')) latest.set(l.target, l);
+  const nexts = [...latest.values()].map((l) => ({ book: l.book, text: l.repeat ? oneLine(l.today) : oneLine(l.next) })).filter((x) => x.text);
+  const nextPlan = lastNote ? lastNote.next_plan : nexts.length > 1 ? nexts.map((x) => `${x.book ? `[${x.book}] ` : ''}${x.text}`).join(' / ') : nexts[0] ? nexts[0].text : '';
 
   const testsNow = (cur.tests.get(s.id) || []).filter((t) => t.correct != null || t.result).map((t) => ({
     date: t.date, kind: t.kind, score: t.correct != null && t.total ? `${fmt(t.correct)}/${fmt(t.total)}` : t.correct != null ? `${fmt(t.correct)}점` : '',

@@ -2,7 +2,7 @@
 
 import { all } from './db.js';
 import { dowOf } from './util.js';
-import { loadCurricula, loadLogs, computeProgress, targetOf, assignOf } from './progress.js';
+import { loadCurricula, loadLogs, computeProgress, targetOf, assignOf, classTracks, trackOnDefault, combineProgress } from './progress.js';
 
 export function hasClassOn(cls, date) {
   const d = String(dowOf(date));
@@ -34,8 +34,15 @@ export async function buildDay(env, date, opts = {}) {
   for (const c of byClass.values()) {
     if (c.type === 'individual') {
       for (const s of c.students) { targets.push(targetOf(c, s)); curIds.push(s.curriculum_id); }
-    } else { targets.push(targetOf(c)); curIds.push(c.curriculum_id); }
+    } else {
+      c.trackDefs = classTracks(c);
+      for (const t of c.trackDefs) { targets.push(t.target); curIds.push(t.curriculum_id); }
+    }
   }
+  const trackDays = new Map((await all(env, 'SELECT class_id, keys FROM track_days WHERE date = ?', date).catch(() => [])).map((r) => {
+    let k = null; try { k = JSON.parse(r.keys); } catch { k = null; } return [r.class_id, Array.isArray(k) ? k.map(String) : null];
+  }));
+  const dow = dowOf(date);
   const curMap = await loadCurricula(env, curIds);
   const logs = targets.length ? await loadLogs(env, targets, date) : { today: new Map(), prev: new Map() };
 
@@ -54,9 +61,23 @@ export async function buildDay(env, date, opts = {}) {
   for (const c of byClass.values()) {
     const cls = { ...c, progress: null };
     if (c.type !== 'individual') {
-      const t = targetOf(c);
-      cls.target = t;
-      cls.progress = computeProgress(assignOf(c), curMap.get(c.curriculum_id), logs.today.get(t), logs.prev.get(t));
+      cls.target = targetOf(c);
+      const override = trackDays.get(c.id);
+      cls.tracks = c.trackDefs.map((t) => {
+        const cur = curMap.get(t.curriculum_id);
+        const on = override ? override.includes(t.key) : (logs.today.has(t.target) || trackOnDefault(t, dow));
+        return { key: t.key, target: t.target, curriculum_id: t.curriculum_id, name: t.free ? '추가 학습' : cur ? cur.name : '', days: t.days, free: !!t.free, on,
+          progress: computeProgress({ curriculum_id: t.curriculum_id, start_seq: t.start_seq }, cur, logs.today.get(t.target), logs.prev.get(t.target)) };
+      });
+      delete cls.trackDefs;
+      cls.progress = combineProgress(cls.tracks, (id) => (curMap.get(id) || {}).name);
+      // 지난 숙제: 이 반의 가장 최근 수업 날 숙제 (어느 진도표든)
+      const prevs = cls.tracks.map((t) => logs.prev.get(t.target)).filter(Boolean);
+      const lastDate = prevs.map((l) => l.date).sort().pop();
+      const lastHw = prevs.filter((l) => l.date === lastDate && String(l.homework || '').trim());
+      cls.progress.prevDate = lastDate || null;
+      cls.progress.prevHomework = lastHw.length > 1 ? lastHw.map((l) => { const t = cls.tracks.find((x) => x.target === l.target); return `[${t ? t.name || '수업' : '수업'}] ${l.homework}`; }).join(' / ') : lastHw[0] ? lastHw[0].homework : '';
+      for (const t of cls.tracks) t.progress.prevHomework = cls.progress.prevHomework;
     }
     cls.students = c.students.map((s) => {
       const st = {

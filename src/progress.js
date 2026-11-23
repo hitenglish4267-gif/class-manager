@@ -90,3 +90,42 @@ export function assignOf(cls, student) {
   if (cls && cls.type === 'individual' && student) return { curriculum_id: student.curriculum_id, start_seq: student.start_seq };
   return { curriculum_id: cls ? cls.curriculum_id : null, start_seq: cls ? cls.start_seq : null };
 }
+
+// ───────── 반 하나에 진도표 여러 개 ─────────
+// 기본 진도표(m) = 반의 curriculum_id, 요일은 cur_days ('' = 수업하는 모든 요일)
+// 추가 진도표(2,3,…) = classes.tracks JSON [{key, curriculum_id, start_seq, days}]
+// 추가 학습(x) = 진도표 없이 그날 직접 적는 칸 (영자신문·보충 등), 기본은 꺼짐
+export function parseTracks(raw) {
+  let a = [];
+  try { a = JSON.parse(raw || '[]'); } catch { a = []; }
+  return (Array.isArray(a) ? a : []).filter((t) => t && /^\d+$/.test(String(t.key)) && t.curriculum_id).map((t) => ({
+    key: String(t.key), curriculum_id: Number(t.curriculum_id), start_seq: t.start_seq === '' || t.start_seq == null ? null : Number(t.start_seq), days: String(t.days || ''),
+  }));
+}
+export function trackTarget(classId, key) { return key === 'm' ? `c${classId}` : `c${classId}t${key}`; }
+export function classTracks(cls) {
+  return [
+    { key: 'm', curriculum_id: cls.curriculum_id || null, start_seq: cls.start_seq, days: String(cls.cur_days || '') },
+    ...parseTracks(cls.tracks),
+    { key: 'x', curriculum_id: null, start_seq: null, days: '-', free: true },
+  ].map((t) => ({ ...t, target: trackTarget(cls.id, t.key) }));
+}
+export function trackOnDefault(t, dow) {
+  if (t.free) return false;
+  if (!t.days) return true;
+  return t.days.split(',').map((s) => s.trim()).includes(String(dow));
+}
+
+/** 그날 켜진 진도표들을 하나로 합친 진도 (메시지·리포트용) */
+export function combineProgress(tracks, curName) {
+  const on = tracks.filter((t) => t.on && t.progress);
+  const first = on[0] ? on[0].progress : null;
+  if (on.length <= 1) return first ? { ...first } : { saved: false, curriculum_id: null, lesson_id: null, seq: null, today: '', next: '', homework: '', repeat: 0, content: '', prevHomework: '', prevDate: null, ended: false };
+  const label = (t) => (t.free ? '추가 학습' : curName(t.curriculum_id) || '수업');
+  const join = (f, withLabel = true) => on.map((t) => { const v = String(t.progress[f] || '').trim(); return v ? (withLabel ? `[${label(t)}] ${v}` : v) : ''; }).filter(Boolean).join(' / ');
+  return {
+    saved: on.every((t) => t.progress.saved), curriculum_id: first.curriculum_id, lesson_id: first.lesson_id, seq: first.seq,
+    today: join('today'), next: on.map((t) => (t.progress.repeat ? String(t.progress.today || '').split(' · ')[0] : t.progress.next) ? `[${label(t)}] ${t.progress.repeat ? String(t.progress.today || '').split(' · ')[0] : t.progress.next}` : '').filter(Boolean).join(' / '),
+    homework: join('homework'), repeat: 0, content: join('content'), prevHomework: '', prevDate: null, ended: false, multi: true,
+  };
+}

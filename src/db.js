@@ -33,16 +33,25 @@ CREATE TABLE IF NOT EXISTS daynotes (date TEXT, student_id INTEGER, teacher_id I
 CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, ref TEXT, student_id INTEGER, token TEXT, facts TEXT, ai TEXT, edited TEXT, source TEXT DEFAULT '', model TEXT DEFAULT '', status TEXT DEFAULT 'queued', error TEXT DEFAULT '', tries INTEGER DEFAULT 0, fails INTEGER DEFAULT 0, fail_at INTEGER DEFAULT 0, viewed_at TEXT, created_at TEXT, updated_at TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS reports_uk ON reports(kind, ref, student_id);
 CREATE UNIQUE INDEX IF NOT EXISTS reports_token ON reports(token);
+CREATE TABLE IF NOT EXISTS track_days (date TEXT, class_id INTEGER, keys TEXT, updated_at TEXT, PRIMARY KEY(date, class_id));
 CREATE TABLE IF NOT EXISTS works (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT, student_id INTEGER, date TEXT, r2key TEXT, mime TEXT, size INTEGER, type TEXT DEFAULT 'writing', memo TEXT DEFAULT '', comment TEXT DEFAULT '', ai TEXT DEFAULT '', include INTEGER DEFAULT 1, status TEXT DEFAULT 'new', error TEXT DEFAULT '', model TEXT DEFAULT '', teacher_id INTEGER, created_at TEXT, updated_at TEXT);
 CREATE INDEX IF NOT EXISTS works_student ON works(student_id, date);
 CREATE UNIQUE INDEX IF NOT EXISTS works_token ON works(token);
 `;
+
+// 반 하나에 진도표 여러 개 (예: 월·수·목 실버스텔라, 화·금 영어홀릭)
+const MIGRATIONS = [
+  "ALTER TABLE classes ADD COLUMN cur_days TEXT DEFAULT ''",
+  "ALTER TABLE classes ADD COLUMN tracks TEXT DEFAULT ''",
+];
 
 let ready = false;
 export async function ensureSchema(env) {
   if (ready) return;
   const stmts = SCHEMA.split(';').map((s) => s.trim()).filter(Boolean);
   await env.DB.batch(stmts.map((s) => env.DB.prepare(s)));
+  // 나중에 추가된 칸 (이미 있으면 그냥 넘어가요)
+  for (const sql of MIGRATIONS) { try { await env.DB.prepare(sql).run(); } catch { /* 이미 있음 */ } }
   ready = true;
 }
 
