@@ -2,7 +2,7 @@
 
 import { all } from './db.js';
 import { dowOf } from './util.js';
-import { loadCurricula, loadLogs, computeProgress, targetOf, assignOf, classTracks, trackOnDefault, combineProgress } from './progress.js';
+import { loadCurricula, loadLogs, computeProgress, targetOf, classTracks, studentTracks, trackOnDefault, combineProgress } from './progress.js';
 
 export function hasClassOn(cls, date) {
   const d = String(dowOf(date));
@@ -33,7 +33,7 @@ export async function buildDay(env, date, opts = {}) {
   const curIds = [];
   for (const c of byClass.values()) {
     if (c.type === 'individual') {
-      for (const s of c.students) { targets.push(targetOf(c, s)); curIds.push(s.curriculum_id); }
+      for (const s of c.students) { s.trackDefs = studentTracks(s); for (const t of s.trackDefs) { targets.push(t.target); curIds.push(t.curriculum_id); } }
     } else {
       c.trackDefs = classTracks(c);
       for (const t of c.trackDefs) { targets.push(t.target); curIds.push(t.curriculum_id); }
@@ -41,6 +41,9 @@ export async function buildDay(env, date, opts = {}) {
   }
   const trackDays = new Map((await all(env, 'SELECT class_id, keys FROM track_days WHERE date = ?', date).catch(() => [])).map((r) => {
     let k = null; try { k = JSON.parse(r.keys); } catch { k = null; } return [r.class_id, Array.isArray(k) ? k.map(String) : null];
+  }));
+  const stuDays = new Map((await all(env, 'SELECT student_id, keys FROM stu_track_days WHERE date = ?', date).catch(() => [])).map((r) => {
+    let k = null; try { k = JSON.parse(r.keys); } catch { k = null; } return [r.student_id, Array.isArray(k) ? k.map(String) : null];
   }));
   const dow = dowOf(date);
   const curMap = await loadCurricula(env, curIds);
@@ -62,24 +65,8 @@ export async function buildDay(env, date, opts = {}) {
     const cls = { ...c, progress: null };
     if (c.type !== 'individual') {
       cls.target = targetOf(c);
-      const override = trackDays.get(c.id);
-      cls.tracks = c.trackDefs.map((t) => {
-        const cur = curMap.get(t.curriculum_id);
-        const on = override ? override.includes(t.key) : (logs.today.has(t.target) || trackOnDefault(t, dow));
-        return { key: t.key, target: t.target, curriculum_id: t.curriculum_id, name: t.free ? '추가 학습' : cur ? cur.name : '', days: t.days, free: !!t.free, on,
-          progress: computeProgress({ curriculum_id: t.curriculum_id, start_seq: t.start_seq }, cur, logs.today.get(t.target), logs.prev.get(t.target)) };
-      });
+      Object.assign(cls, resolveTracks(c.trackDefs, trackDays.get(c.id), logs, curMap, dow));
       delete cls.trackDefs;
-      cls.progress = combineProgress(cls.tracks, (id) => (curMap.get(id) || {}).name);
-      // 지난 숙제: 이 반의 가장 최근 수업 날 숙제 (어느 진도표든)
-      const prevs = cls.tracks.map((t) => logs.prev.get(t.target)).filter(Boolean);
-      const lastDate = prevs.map((l) => l.date).sort().pop();
-      const lastHw = prevs.filter((l) => l.date === lastDate && String(l.homework || '').trim());
-      cls.progress.prevDate = lastDate || null;
-      cls.progress.prevHomework = lastHw.length > 1 ? lastHw.map((l) => { const t = cls.tracks.find((x) => x.target === l.target); return `[${t ? t.name || '수업' : '수업'}] ${l.homework}`; }).join(' / ') : lastHw[0] ? lastHw[0].homework : '';
-      const lastLogs = prevs.filter((l) => l.date === lastDate && String(l.today || '').trim());
-      cls.progress.prevToday = lastLogs.map((l) => { const t = cls.tracks.find((x) => x.target === l.target); return `${lastLogs.length > 1 ? `[${t ? t.name || '수업' : '수업'}] ` : ''}${String(l.today).replace(/\s*\n+\s*/g, ' / ')}${l.repeat ? ' (다시 하기로 함)' : ''}`; }).join(' / ');
-      for (const t of cls.tracks) { t.progress.prevHomework = cls.progress.prevHomework; t.progress.prevToday = cls.progress.prevToday; t.progress.prevDate = cls.progress.prevDate; }
     }
     cls.students = c.students.map((s) => {
       const st = {
@@ -92,13 +79,36 @@ export async function buildDay(env, date, opts = {}) {
         alert: alertMap.get(s.id) || null,
       };
       if (c.type === 'individual') {
-        const t = targetOf(c, s);
-        st.target = t;
-        st.progress = computeProgress(assignOf(c, s), curMap.get(s.curriculum_id), logs.today.get(t), logs.prev.get(t));
+        st.target = targetOf(c, s);
+        st.tracks_raw = s.tracks || '';
+        st.cur_days = s.cur_days || '';
+        Object.assign(st, resolveTracks(s.trackDefs, stuDays.get(s.id), logs, curMap, dow));
       }
       return st;
     });
     out.push(cls);
   }
   return { date, classes: out, curricula: curMap };
+}
+
+/** 진도표 여러 개(반 또는 개별 학생)를 오늘 날짜로 풀기 → { tracks, progress } */
+function resolveTracks(defs, override, logs, curMap, dow) {
+  const tracks = defs.map((t) => {
+    const cur = curMap.get(t.curriculum_id);
+    const on = override ? override.includes(t.key) : (logs.today.has(t.target) || trackOnDefault(t, dow));
+    return { key: t.key, target: t.target, curriculum_id: t.curriculum_id, name: t.free ? '추가 학습' : cur ? cur.name : '', days: t.days, free: !!t.free, on,
+      progress: computeProgress({ curriculum_id: t.curriculum_id, start_seq: t.start_seq }, cur, logs.today.get(t.target), logs.prev.get(t.target)) };
+  });
+  const progress = combineProgress(tracks, (id) => (curMap.get(id) || {}).name);
+  // 지난 숙제·지난 수업: 가장 최근 수업 날 기록 (어느 진도표든)
+  const prevs = tracks.map((t) => logs.prev.get(t.target)).filter(Boolean);
+  const lastDate = prevs.map((l) => l.date).sort().pop();
+  const label = (l) => { const t = tracks.find((x) => x.target === l.target); return t ? t.name || '수업' : '수업'; };
+  const lastHw = prevs.filter((l) => l.date === lastDate && String(l.homework || '').trim());
+  progress.prevDate = lastDate || null;
+  progress.prevHomework = lastHw.length > 1 ? lastHw.map((l) => `[${label(l)}] ${l.homework}`).join(' / ') : lastHw[0] ? lastHw[0].homework : '';
+  const lastLogs = prevs.filter((l) => l.date === lastDate && String(l.today || '').trim());
+  progress.prevToday = lastLogs.map((l) => `${lastLogs.length > 1 ? `[${label(l)}] ` : ''}${String(l.today).replace(/\s*\n+\s*/g, ' / ')}${l.repeat ? ' (다시 하기로 함)' : ''}`).join(' / ');
+  for (const t of tracks) { t.progress.prevHomework = progress.prevHomework; t.progress.prevToday = progress.prevToday; t.progress.prevDate = progress.prevDate; }
+  return { tracks, progress };
 }

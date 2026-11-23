@@ -3,7 +3,7 @@
 import { all, first, run, getSettings, setSetting, DEFAULT_SETTINGS } from './db.js';
 import { json, bad, HttpError, randomToken, hashPassword, kstNow, addDays, normPhone, dowOf } from './util.js';
 import { buildDay } from './context.js';
-import { parseTracks } from './progress.js';
+import { parseTracks, keyOfTarget } from './progress.js';
 import { generate, sendMessages, refreshIfExists, attendanceAlert, buildSendItem, applyOverride, ATT_LABEL, HW_LABEL, testText } from './messages.js';
 import { solapiStatus, solapiBalance, sendBatch, authMode, kakaoOnly } from './solapi.js';
 import { oauthStatus, getAccessToken } from './solapi-oauth.js';
@@ -193,19 +193,37 @@ async function saveRecord(env, me, body, ctx) {
     for (const t of targets) { const key = t.includes('t') ? t.split('t')[1] : 'm'; if (!onKeys.includes(key)) stmts.push(env.DB.prepare('DELETE FROM logs WHERE date = ? AND target = ?').bind(date, t)); }
     if (!onKeys.includes('x')) stmts.push(env.DB.prepare('DELETE FROM logs WHERE date = ? AND target = ?').bind(date, `c${classId}tx`));
   }
+  const allowed = new Set((await all(env, 'SELECT id FROM students WHERE class_id = ?', classId)).map((r) => r.id));
+  // 개별수업: 학생마다 오늘 한 교재
+  const stuOn = new Map();
+  if (body.student_tracks && typeof body.student_tracks === 'object') {
+    for (const [sid, keys] of Object.entries(body.student_tracks)) {
+      const id = Number(sid);
+      if (!allowed.has(id) || !Array.isArray(keys)) continue;
+      const on = keys.map(String).filter((k) => /^(?:m|\d+|x)$/.test(k));
+      stuOn.set(id, on);
+      stmts.push(env.DB.prepare(`INSERT INTO stu_track_days (date, student_id, keys, updated_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(date, student_id) DO UPDATE SET keys = excluded.keys, updated_at = excluded.updated_at`).bind(date, id, JSON.stringify(on), stamp));
+      const targets = (await all(env, 'SELECT target FROM logs WHERE date = ? AND (target = ? OR target LIKE ?)', date, `s${id}`, `s${id}t%`)).map((r) => r.target);
+      for (const t of targets) if (!on.includes(keyOfTarget(t))) stmts.push(env.DB.prepare('DELETE FROM logs WHERE date = ? AND target = ?').bind(date, t));
+    }
+  }
   for (const l of body.logs || []) {
-    if (!/^(?:[cs]\d+|c\d+t(?:\d+|x))$/.test(String(l.target))) continue;
-    if (String(l.target).startsWith('c') && Number(String(l.target).slice(1).split('t')[0]) !== classId) continue;
-    if (onKeys && /^c\d+/.test(l.target)) { const key = l.target.includes('t') ? l.target.split('t')[1] : 'm'; if (!onKeys.includes(key)) continue; }
-    if (/^c\d+tx$/.test(l.target) && !String(l.today || '').trim() && !String(l.homework || '').trim()) continue;
+    const tg = String(l.target);
+    if (!/^[cs]\d+(?:t(?:\d+|x))?$/.test(tg)) continue;
+    const ownerId = Number(tg.slice(1).split('t')[0]);
+    if (tg.startsWith('c') && ownerId !== classId) continue;
+    if (tg.startsWith('s') && !allowed.has(ownerId)) continue;
+    if (onKeys && tg.startsWith('c') && !onKeys.includes(keyOfTarget(tg))) continue;
+    if (tg.startsWith('s') && stuOn.has(ownerId) && !stuOn.get(ownerId).includes(keyOfTarget(tg))) continue;
+    if (/tx$/.test(tg) && !String(l.today || '').trim() && !String(l.homework || '').trim()) continue;
     stmts.push(env.DB.prepare(`INSERT INTO logs (date, target, class_id, curriculum_id, lesson_id, seq, today, next, homework, repeat, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(date, target) DO UPDATE SET class_id = excluded.class_id,
       curriculum_id = excluded.curriculum_id, lesson_id = excluded.lesson_id, seq = excluded.seq, today = excluded.today,
       next = excluded.next, homework = excluded.homework, repeat = excluded.repeat, updated_at = excluded.updated_at`)
-      .bind(date, l.target, classId, l.curriculum_id || null, l.lesson_id || null, l.seq ?? null,
+      .bind(date, tg, classId, l.curriculum_id || null, l.lesson_id || null, l.seq ?? null,
         String(l.today || ''), String(l.next || ''), String(l.homework || ''), l.repeat ? 1 : 0, stamp));
   }
-  const allowed = new Set((await all(env, 'SELECT id FROM students WHERE class_id = ?', classId)).map((r) => r.id));
   for (const s of body.students || []) {
     if (!allowed.has(Number(s.id))) continue;
     stmts.push(env.DB.prepare(`INSERT INTO days (date, student_id, class_id, hw, comment, updated_at) VALUES (?, ?, ?, ?, ?, ?)
@@ -230,12 +248,31 @@ async function saveRecord(env, me, body, ctx) {
 
 async function setStudentCurriculum(env, me, body) {
   await assertStudent(env, me, body.student_id);
+  const sid = Number(body.student_id);
   const cur = body.curriculum_id ? await first(env, 'SELECT id, course_id FROM curricula WHERE id = ?', Number(body.curriculum_id)) : null;
-  await run(env, 'UPDATE students SET curriculum_id = ?, start_seq = ?, course_id = COALESCE(?, course_id) WHERE id = ?',
-    cur ? cur.id : null, body.start_seq === '' || body.start_seq == null ? null : Number(body.start_seq), cur ? cur.course_id : null, Number(body.student_id));
-  // 오늘 이미 저장된 기록이 다른 진도표라면 지워서 새 진도표로 다시 채워지게
-  if (body.date) await run(env, 'DELETE FROM logs WHERE date = ? AND target = ? AND (curriculum_id IS NULL OR curriculum_id != ?)', body.date, `s${Number(body.student_id)}`, cur ? cur.id : -1);
-  return { ok: true };
+  const startSeq = body.start_seq === '' || body.start_seq == null ? null : Number(body.start_seq);
+  const key = body.key == null ? 'm' : String(body.key);
+  if (key === 'm') {
+    await run(env, 'UPDATE students SET curriculum_id = ?, start_seq = ?, course_id = COALESCE(?, course_id) WHERE id = ?',
+      cur ? cur.id : null, startSeq, cur ? cur.course_id : null, sid);
+    // 오늘 이미 저장된 기록이 다른 진도표라면 지워서 새 진도표로 다시 채워지게
+    if (body.date) await run(env, 'DELETE FROM logs WHERE date = ? AND target = ? AND (curriculum_id IS NULL OR curriculum_id != ?)', body.date, `s${sid}`, cur ? cur.id : -1);
+    return { ok: true, key };
+  }
+  // 추가 교재: students.tracks JSON
+  const row = await first(env, 'SELECT tracks FROM students WHERE id = ?', sid);
+  let list = parseTracks(row ? row.tracks : '');
+  let k = key;
+  if (key === 'new') {
+    if (!cur) throw bad('교재(진도표)를 골라 주세요');
+    k = String(Math.max(1, ...list.map((t) => Number(t.key))) + 1);
+    list.push({ key: k, curriculum_id: cur.id, start_seq: startSeq, days: '' });
+  } else if (!/^\d+$/.test(key)) throw bad('잘못된 교재예요');
+  else if (body.remove || !cur) list = list.filter((t) => t.key !== key);
+  else list = list.map((t) => (t.key === key ? { ...t, curriculum_id: cur.id, start_seq: startSeq } : t));
+  await run(env, 'UPDATE students SET tracks = ? WHERE id = ?', JSON.stringify(list), sid);
+  if (body.date && key !== 'new') await run(env, 'DELETE FROM logs WHERE date = ? AND target = ? AND (curriculum_id IS NULL OR curriculum_id != ?)', body.date, `s${sid}t${key}`, body.remove || !cur ? -1 : cur.id);
+  return { ok: true, key: k };
 }
 
 // ───────── 숙제 현황 ─────────
@@ -320,7 +357,8 @@ async function evalsGet(env, me, url) {
   const students = cls.students.map((s) => {
     const p = (cls.type === 'individual' ? s.progress : cls.progress) || {};
     const cur = ctx.curricula.get(p.curriculum_id || (cls.type === 'individual' ? s.curriculum_id : cls.curriculum_id));
-    const books = cls.type !== 'individual' && cls.tracks ? cls.tracks.filter((t) => t.on && t.name).map((t) => t.name).join(', ') : '';
+    const tr = cls.type === 'individual' ? s.tracks : cls.tracks;
+    const books = tr ? tr.filter((t) => t.on && t.name).map((t) => t.name).join(', ') : '';
     return {
       id: s.id, name: s.name, att: ATT_LABEL[s.day.att] || '', reason: s.day.reason || '', hw: HW_LABEL[s.day.hw] || '',
       tests: testText(s.tests), comment: s.day.comment || '', book: books || (cur ? cur.name : ''), planned: p.today || '', next: p.next || '',
@@ -433,7 +471,7 @@ async function adminData(env) {
   const { director_pw, director_salt, ...safe } = settings;
   const teachers = await all(env, 'SELECT id, name, active, sort, (pw IS NOT NULL) AS has_pw FROM teachers ORDER BY active DESC, sort, name');
   const classes = await all(env, 'SELECT * FROM classes WHERE deleted = 0 ORDER BY sort, name');
-  const students = await all(env, 'SELECT id, name, class_id, phone, course_id, curriculum_id, start_seq, code, msg_style FROM students WHERE deleted = 0 ORDER BY name');
+  const students = await all(env, 'SELECT id, name, class_id, phone, course_id, curriculum_id, start_seq, code, msg_style, tracks, cur_days FROM students WHERE deleted = 0 ORDER BY name');
   return {
     settings: safe, teachers, classes, students,
     solapi: solapiStatus(env), r2: r2Ready(env), ai: !!env.AI,
@@ -536,12 +574,16 @@ async function saveStudent(env, body) {
   const vals = [name, cls ? cls.id : null, phone, body.course_id ? Number(body.course_id) : (cls ? cls.course_id : null),
     body.curriculum_id ? Number(body.curriculum_id) : null, body.start_seq === '' || body.start_seq == null ? null : Number(body.start_seq),
     ['basic', 'cushion'].includes(body.msg_style) ? body.msg_style : ''];
+  // 개별수업 추가 교재 (보내지 않으면 그대로 둬요)
+  const hasTracks = Array.isArray(body.tracks);
+  const tracks = hasTracks ? JSON.stringify(parseTracks(JSON.stringify(body.tracks))) : null;
+  const curDays = body.cur_days == null ? null : String(body.cur_days).replace(/[^0-6,]/g, '');
   if (body.id) {
-    await run(env, 'UPDATE students SET name=?, class_id=?, phone=?, course_id=?, curriculum_id=?, start_seq=?, msg_style=? WHERE id=?', ...vals, Number(body.id));
+    await run(env, 'UPDATE students SET name=?, class_id=?, phone=?, course_id=?, curriculum_id=?, start_seq=?, msg_style=?, tracks=COALESCE(?, tracks), cur_days=COALESCE(?, cur_days) WHERE id=?', ...vals, tracks, curDays, Number(body.id));
     return { ok: true, id: Number(body.id) };
   }
   const code = await uniqueCode(env);
-  return { ok: true, id: (await run(env, 'INSERT INTO students (name, class_id, phone, course_id, curriculum_id, start_seq, msg_style, code, created_at) VALUES (?,?,?,?,?,?,?,?,?)', ...vals, code, kstNow().stamp)).meta.last_row_id };
+  return { ok: true, id: (await run(env, 'INSERT INTO students (name, class_id, phone, course_id, curriculum_id, start_seq, msg_style, tracks, cur_days, code, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)', ...vals, tracks || '', curDays || '', code, kstNow().stamp)).meta.last_row_id };
 }
 
 async function importStudents(env, body) {
@@ -617,7 +659,7 @@ async function lessonsOf(env, url) {
   if (!cur) throw bad('진도표를 찾을 수 없어요');
   const lessons = await all(env, 'SELECT * FROM lessons WHERE curriculum_id = ? ORDER BY seq, id', id);
   const used = await all(env, `SELECT 'class' AS t, name FROM classes WHERE curriculum_id = ? AND deleted = 0
-    UNION ALL SELECT 'student' AS t, name FROM students WHERE curriculum_id = ? AND deleted = 0`, id, id);
+    UNION ALL SELECT 'student' AS t, name FROM students WHERE (curriculum_id = ? OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tracks) THEN tracks ELSE '[]' END) j WHERE json_extract(j.value, '$.curriculum_id') = ?)) AND deleted = 0`, id, id, id);
   return { curriculum: cur, lessons, used };
 }
 
@@ -697,7 +739,6 @@ async function exportCsv(env, me, url) {
     FROM days d LEFT JOIN students s ON s.id = d.student_id LEFT JOIN classes c ON c.id = d.class_id
     WHERE d.date >= ? AND d.date <= ? ORDER BY d.date, c.name, s.name`, from, to);
   const logs = await all(env, 'SELECT * FROM logs WHERE date >= ? AND date <= ?', from, to);
-  const lMap = new Map(logs.map((l) => [`${l.date}|${l.target}`, l]));
   const tRows = await all(env, 'SELECT * FROM tests WHERE date >= ? AND date <= ? ORDER BY kind', from, to);
   const tMap = new Map();
   for (const t of tRows) { const k = `${t.date}|${t.student_id}`; if (!tMap.has(k)) tMap.set(k, []); tMap.get(k).push(t); }
@@ -705,12 +746,11 @@ async function exportCsv(env, me, url) {
   const lines = [['날짜', '반', '학생', '출결', '사유', '지난 숙제 결과', '오늘 할 일', '오늘 숙제', '다음 수업', '시험 (맞은 수/문항 수)', '선생님 한마디'].map(q).join(',')];
   for (const d of days) {
     if (me.role === 'teacher' && d.teacher_id !== me.id) continue;
-    let l = lMap.get(`${d.date}|${d.class_type === 'individual' ? 's' + d.student_id : 'c' + d.class_id}`) || {};
-    if (d.class_type !== 'individual') {
-      const all3 = logs.filter((x) => x.date === d.date && (x.target === `c${d.class_id}` || x.target.startsWith(`c${d.class_id}t`)));
-      if (all3.length > 1) l = { today: all3.map((x) => x.today).filter(Boolean).join(' / '), homework: all3.map((x) => x.homework).filter(Boolean).join(' / '), next: all3.map((x) => x.next).filter(Boolean).join(' / ') };
-      else if (all3.length) l = all3[0];
-    }
+    let l = {};
+    const tg = d.class_type === 'individual' ? `s${d.student_id}` : `c${d.class_id}`;
+    const all3 = logs.filter((x) => x.date === d.date && (x.target === tg || x.target.startsWith(`${tg}t`)));
+    if (all3.length > 1) l = { today: all3.map((x) => x.today).filter(Boolean).join(' / '), homework: all3.map((x) => x.homework).filter(Boolean).join(' / '), next: all3.map((x) => x.next).filter(Boolean).join(' / ') };
+    else if (all3.length) l = all3[0];
     lines.push([d.date, d.class_name, d.student_name, ATT_LABEL[d.att] || '', d.reason, HW_LABEL[d.hw] || '', l.today, l.homework, l.next, testText(tMap.get(`${d.date}|${d.student_id}`)), d.comment].map(q).join(','));
   }
   return new Response('﻿' + lines.join('\r\n'), {

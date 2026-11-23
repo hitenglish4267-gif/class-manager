@@ -354,3 +354,8 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-
 /* 반 하나에 진도표 여러 개 */
 .track-pick { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 14px 0; }
 .track-pick + .prog, .prog + .prog { margin-top: 8px; }
+/* 개별수업: 학생마다 교재 여러 권 */
+.stu-tracks .track-pick { padding: 10px 0 0; }
+.stu-tracks .stu-prog + .stu-prog { margin-top: 8px; }
+.chip-btn.add { border-style: dashed; display: inline-flex; align-items: center; gap: 4px; }
+.chip-btn.add svg { width: 14px; height: 14px; }

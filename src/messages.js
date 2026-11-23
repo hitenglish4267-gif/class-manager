@@ -128,10 +128,10 @@ async function periodVars(env, settings, kind, ref) {
   const classes = await all(env, 'SELECT id, type FROM classes');
   const classType = new Map(classes.map((c) => [c.id, c.type]));
   const logs = await all(env, 'SELECT * FROM logs WHERE date >= ? AND date <= ? ORDER BY date', from, to);
+  const curNames = new Map((await all(env, 'SELECT id, name FROM curricula')).map((c) => [c.id, c.name]));
   const testRows = await all(env, 'SELECT * FROM tests WHERE date >= ? AND date <= ? ORDER BY date', from, to);
   const testsBy = new Map();
   for (const t of testRows) { if (!testsBy.has(t.student_id)) testsBy.set(t.student_id, []); testsBy.get(t.student_id).push(t); }
-  const logMap = new Map(logs.map((l) => [`${l.date}|${l.target}`, l]));
   const byStudent = new Map();
   for (const d of days) { if (!byStudent.has(d.student_id)) byStudent.set(d.student_id, []); byStudent.get(d.student_id).push(d); }
   const url = baseUrl(settings, env);
@@ -158,16 +158,30 @@ async function periodVars(env, settings, kind, ref) {
     const rate = total ? Math.round((cnt.done / total) * 100) : null;
     const lessonLogs = [];
     for (const r of attended) {
-      if (classType.get(r.class_id) === 'individual') { const l = logMap.get(`${r.date}|s${s.id}`); if (l) lessonLogs.push(l); }
-      else for (const l of logs) if (l.date === r.date && (l.target === `c${r.class_id}` || l.target.startsWith(`c${r.class_id}t`))) lessonLogs.push(l);
+      const tg = classType.get(r.class_id) === 'individual' ? `s${s.id}` : `c${r.class_id}`;
+      for (const l of logs) if (l.date === r.date && (l.target === tg || l.target.startsWith(`${tg}t`))) lessonLogs.push(l);
     }
-    const titles = lessonLogs.map((l) => String(l.today || '').split(' · ')[0]).filter(Boolean);
-    const uniq = [...new Set(titles)];
+    // 진도: 교재(진도표)마다 따로 "처음 → 마지막", 수업 횟수는 수업한 날 수
+    const lessonDays = new Set(lessonLogs.map((l) => l.date)).size;
+    const uniq = [...new Set(lessonLogs.map((l) => String(l.today || '').split(' · ')[0]).filter(Boolean))];
+    const books = new Map();
+    for (const l of lessonLogs) { const k = String(l.target).replace(/^[cs]\d+/, '') || 'm'; if (!books.has(k)) books.set(k, []); books.get(k).push(l); }
+    const bookName = (arr) => (/tx$/.test(arr[0].target) ? '추가 학습' : curNames.get(arr[0].curriculum_id) || '');
+    const span = (arr) => { const u = [...new Set(arr.map((l) => String(l.today || '').split(' · ')[0]).filter(Boolean))]; return u.length > 1 ? `${u[0]} → ${u[u.length - 1]}` : u[0] || ''; };
+    const nextOf = (l) => (l.repeat ? String(l.today || '').split(' · ')[0] : l.next || '');
     let progress = '';
-    if (uniq.length === 1) progress = `${uniq[0]} (수업 ${lessonLogs.length}회)`;
-    else if (uniq.length > 1) progress = `${uniq[0]} → ${uniq[uniq.length - 1]} (수업 ${lessonLogs.length}회)`;
-    const last = lessonLogs[lessonLogs.length - 1];
-    const nextPlan = last ? (last.repeat ? String(last.today || '').split(' · ')[0] : last.next || '') : '';
+    let nextPlan = '';
+    if (books.size <= 1) {
+      const arr = [...books.values()][0] || [];
+      const sp = arr.length ? span(arr) : '';
+      if (sp) progress = `${sp} (수업 ${lessonDays}회)`;
+      const last = arr[arr.length - 1];
+      nextPlan = last ? nextOf(last) : '';
+    } else {
+      const parts = [...books.values()].map((arr) => { const sp = span(arr); return sp ? `[${bookName(arr) || '수업'}] ${sp}` : ''; }).filter(Boolean);
+      if (parts.length) progress = `${parts.join(' / ')} (수업 ${lessonDays}회)`;
+      nextPlan = [...books.values()].filter((arr) => !/tx$/.test(arr[0].target)).map((arr) => { const n = nextOf(arr[arr.length - 1]); return n ? `[${bookName(arr) || '수업'}] ${n}` : ''; }).filter(Boolean).join(' / ');
+    }
     const comments = rows.map((r) => String(r.comment || '').trim()).filter(Boolean);
     const base = { 학원: settings.academy || '', 학생명: s.name };
     const seed = `${s.id}|${kind}|${ref}`;
