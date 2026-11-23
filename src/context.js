@@ -2,7 +2,7 @@
 
 import { all } from './db.js';
 import { dowOf } from './util.js';
-import { loadCurricula, loadLogs, computeProgress, targetOf, assignOf, classTracks, trackOnDefault, combineProgress } from './progress.js';
+import { loadCurricula, loadLogs, targetOf, classTracks, studentTracks, isSolo, buildTracks } from './progress.js';
 
 export function hasClassOn(cls, date) {
   const d = String(dowOf(date));
@@ -32,11 +32,14 @@ export async function buildDay(env, date, opts = {}) {
   const targets = [];
   const curIds = [];
   for (const c of byClass.values()) {
-    if (c.type === 'individual') {
-      for (const s of c.students) { targets.push(targetOf(c, s)); curIds.push(s.curriculum_id); }
-    } else {
+    if (c.type !== 'individual') {
       c.trackDefs = classTracks(c);
       for (const t of c.trackDefs) { targets.push(t.target); curIds.push(t.curriculum_id); }
+    }
+    // 개별 진도 학생 (개별수업 반 전원 + 그룹 반에서 "개별 진도"로 바꾼 학생)
+    for (const s of c.students) if (isSolo(c, s)) {
+      s.trackDefs = studentTracks(s);
+      for (const t of s.trackDefs) { targets.push(t.target); curIds.push(t.curriculum_id); }
     }
   }
   const trackDays = new Map((await all(env, 'SELECT class_id, keys FROM track_days WHERE date = ?', date).catch(() => [])).map((r) => {
@@ -62,39 +65,25 @@ export async function buildDay(env, date, opts = {}) {
     const cls = { ...c, progress: null };
     if (c.type !== 'individual') {
       cls.target = targetOf(c);
-      const override = trackDays.get(c.id);
-      cls.tracks = c.trackDefs.map((t) => {
-        const cur = curMap.get(t.curriculum_id);
-        const on = override ? override.includes(t.key) : (logs.today.has(t.target) || trackOnDefault(t, dow));
-        return { key: t.key, target: t.target, curriculum_id: t.curriculum_id, name: t.free ? '추가 학습' : cur ? cur.name : '', days: t.days, free: !!t.free, on,
-          progress: computeProgress({ curriculum_id: t.curriculum_id, start_seq: t.start_seq }, cur, logs.today.get(t.target), logs.prev.get(t.target)) };
-      });
+      const b = buildTracks(c.trackDefs, trackDays.get(c.id), logs, curMap, dow);
+      cls.tracks = b.tracks; cls.progress = b.progress;
       delete cls.trackDefs;
-      cls.progress = combineProgress(cls.tracks, (id) => (curMap.get(id) || {}).name);
-      // 지난 숙제: 이 반의 가장 최근 수업 날 숙제 (어느 진도표든)
-      const prevs = cls.tracks.map((t) => logs.prev.get(t.target)).filter(Boolean);
-      const lastDate = prevs.map((l) => l.date).sort().pop();
-      const lastHw = prevs.filter((l) => l.date === lastDate && String(l.homework || '').trim());
-      cls.progress.prevDate = lastDate || null;
-      cls.progress.prevHomework = lastHw.length > 1 ? lastHw.map((l) => { const t = cls.tracks.find((x) => x.target === l.target); return `[${t ? t.name || '수업' : '수업'}] ${l.homework}`; }).join(' / ') : lastHw[0] ? lastHw[0].homework : '';
-      const lastLogs = prevs.filter((l) => l.date === lastDate && String(l.today || '').trim());
-      cls.progress.prevToday = lastLogs.map((l) => { const t = cls.tracks.find((x) => x.target === l.target); return `${lastLogs.length > 1 ? `[${t ? t.name || '수업' : '수업'}] ` : ''}${String(l.today).replace(/\s*\n+\s*/g, ' / ')}${l.repeat ? ' (다시 하기로 함)' : ''}`; }).join(' / ');
-      for (const t of cls.tracks) { t.progress.prevHomework = cls.progress.prevHomework; t.progress.prevToday = cls.progress.prevToday; t.progress.prevDate = cls.progress.prevDate; }
     }
     cls.students = c.students.map((s) => {
       const st = {
         id: s.id, name: s.name, phone: s.phone, code: s.code, msg_style: s.msg_style,
-        curriculum_id: s.curriculum_id, start_seq: s.start_seq, course_id: s.course_id,
+        curriculum_id: s.curriculum_id, start_seq: s.start_seq, course_id: s.course_id, solo: isSolo(c, s),
         day: dayMap.get(s.id) || { att: '', reason: '', hw: '', comment: '' },
         tests: testMap.get(s.id) || [],
         media: mediaMap.get(s.id) || 0,
         msg: msgMap.get(s.id) || null,
         alert: alertMap.get(s.id) || null,
       };
-      if (c.type === 'individual') {
-        const t = targetOf(c, s);
-        st.target = t;
-        st.progress = computeProgress(assignOf(c, s), curMap.get(s.curriculum_id), logs.today.get(t), logs.prev.get(t));
+      if (st.solo) {
+        st.target = targetOf({ type: 'individual' }, s);
+        // 학생별 요일 바꿈은 track_days에 class_id = -학생번호로 저장
+        const b = buildTracks(s.trackDefs, trackDays.get(-s.id), logs, curMap, dow);
+        st.tracks = b.tracks; st.progress = b.progress;
       }
       return st;
     });

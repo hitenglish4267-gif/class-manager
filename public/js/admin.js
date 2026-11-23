@@ -264,12 +264,15 @@ function editStudent(s, draw) {
     const cls = h('select', { class: 'input' }, h('option', { value: '' }, '반 고르기'), A.classes.map((c) => h('option', { value: c.id, selected: c.id === s.class_id }, `${c.name}${c.type === 'individual' ? ' (개별)' : ''}`)));
     const course = h('select', { class: 'input' }, h('option', { value: '' }, '과정 고르기'), S.meta.courses.map((x) => h('option', { value: x.id, selected: x.id === s.course_id }, x.name)));
     const picker = curriculumPicker(course, s.curriculum_id, s.start_seq);
-    const indBox = h('div', { class: 'stack' }, h('div', { class: 'note small' }, '개별수업 학생의 진도표예요. 과정을 먼저 고르면 그 과정 진도표만 보여요.'), h('div', { class: 'grid3' }, field('과정', course), field('진도표', picker.cur), field('시작 차시', picker.start)));
-    const paintInd = () => { const c = A.classes.find((x) => x.id === Number(cls.value)); indBox.classList.toggle('hidden', !(c && c.type === 'individual')); if (c && !course.value && c.course_id) { course.value = c.course_id; course.dispatchEvent(new Event('change')); } };
+    const indBox = h('div', { class: 'stack' }, h('div', { class: 'note small' }, '이 학생만의 교재·진도예요. 과정을 먼저 고르면 그 과정 진도표만 보여요. 교재를 2권 이상 하면 오늘 수업 화면의 "+ 교재 추가"로 더하세요.'), h('div', { class: 'grid3' }, field('과정', course), field('진도표', picker.cur), field('시작 차시', picker.start)));
+    const soloBox = h('input', { type: 'checkbox', checked: !!s.solo });
+    const soloRow = h('label', { class: 'check small' }, soloBox, '개별 진도 (반 진도와 다른 책·진도를 써요 — 중등부 등)');
+    const paintInd = () => { const c = A.classes.find((x) => x.id === Number(cls.value)); const group = c && c.type !== 'individual'; soloRow.classList.toggle('hidden', !group); indBox.classList.toggle('hidden', !(c && (c.type === 'individual' || soloBox.checked))); if (c && !course.value && c.course_id) { course.value = c.course_id; course.dispatchEvent(new Event('change')); } };
+    soloBox.addEventListener('change', paintInd);
     cls.addEventListener('change', paintInd); paintInd();
     const style = h('select', { class: 'input' }, [['', '전체 설정 따름'], ['basic', '알림톡 기본형'], ['cushion', '알림톡 쿠션멘트형']].map(([v, l]) => h('option', { value: v, selected: s.msg_style === v }, l)));
     return h('div', { class: 'stack' },
-      h('div', { class: 'grid2' }, field('이름', name), field('학부모 번호', phone)), field('반', cls), indBox,
+      h('div', { class: 'grid2' }, field('이름', name), field('학부모 번호', phone)), field('반', cls), soloRow, indBox,
       field('메시지 형식', style, '알림톡 템플릿을 넣은 경우에만 쓰여요'),
       !isNew && s.code ? h('div', { class: 'row' }, h('span', { class: 'small muted grow' }, '사진·영상 모아 보기 링크 (로그인 없이 열려요)'), h('button', { class: 'btn small', onclick: () => copyText(`${location.origin}/g/${s.code}`) }, icon('link'), '링크 복사')) : null,
       h('div', { class: 'row mt' },
@@ -279,8 +282,8 @@ function editStudent(s, draw) {
         } }, '학생 지우기') : null,
         h('button', { class: 'btn primary', style: { marginLeft: 'auto' }, onclick: async () => {
           const c = A.classes.find((x) => x.id === Number(cls.value));
-          const ind = c && c.type === 'individual';
-          const body = { id: s.id, name: name.value, phone: phone.value, class_id: Number(cls.value) || null, course_id: Number(course.value) || (c ? c.course_id : null), curriculum_id: ind ? Number(picker.cur.value) || null : s.curriculum_id, start_seq: ind && picker.start.value !== '' ? Number(picker.start.value) : (ind ? null : s.start_seq), msg_style: style.value };
+          const ind = c && (c.type === 'individual' || soloBox.checked);
+          const body = { solo: !!(c && c.type !== 'individual' && soloBox.checked), id: s.id, name: name.value, phone: phone.value, class_id: Number(cls.value) || null, course_id: Number(course.value) || (c ? c.course_id : null), curriculum_id: ind ? Number(picker.cur.value) || null : s.curriculum_id, start_seq: ind && picker.start.value !== '' ? Number(picker.start.value) : (ind ? null : s.start_seq), msg_style: style.value };
           try {
             const r = await api('/api/admin/student', body);
             body.phone = String(phone.value).replace(/\D/g, '');

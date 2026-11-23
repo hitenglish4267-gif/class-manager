@@ -130,3 +130,35 @@ export function combineProgress(tracks, curName) {
     homework: join('homework'), repeat: 0, content: join('content'), prevHomework: '', prevDate: null, ended: false, multi: true,
   };
 }
+
+// ───────── 학생 개별 진도 (중등부·개별수업: 학생마다 다른 책·진도, 책 여러 권) ─────────
+export function studentTarget(studentId, key) { return key === 'm' ? `s${studentId}` : `s${studentId}t${key}`; }
+export function studentTracks(s) {
+  return [
+    { key: 'm', curriculum_id: s.curriculum_id || null, start_seq: s.start_seq, days: String(s.cur_days || '') },
+    ...parseTracks(s.tracks),
+    { key: 'x', curriculum_id: null, start_seq: null, days: '-', free: true },
+  ].map((t) => ({ ...t, target: studentTarget(s.id, t.key) }));
+}
+export function isSolo(cls, s) { return (cls && cls.type === 'individual') || !!(s && s.solo); }
+
+/** 진도표 묶음 → 그날 켜진 것·진도·지난 수업/숙제까지 (반이든 학생이든 같은 방식) */
+export function buildTracks(defs, override, logs, curMap, dow) {
+  const tracks = defs.map((t) => {
+    const cur = curMap.get(t.curriculum_id);
+    const on = override ? override.includes(t.key) : (logs.today.has(t.target) || trackOnDefault(t, dow));
+    return { key: t.key, target: t.target, curriculum_id: t.curriculum_id, name: t.free ? '추가 학습' : cur ? cur.name : '', days: t.days, free: !!t.free, on,
+      progress: computeProgress({ curriculum_id: t.curriculum_id, start_seq: t.start_seq }, cur, logs.today.get(t.target), logs.prev.get(t.target)) };
+  });
+  const progress = combineProgress(tracks, (id) => (curMap.get(id) || {}).name);
+  const prevs = tracks.map((t) => logs.prev.get(t.target)).filter(Boolean);
+  const lastDate = prevs.map((l) => l.date).sort().pop();
+  const label = (l) => { const t = tracks.find((x) => x.target === l.target); return t ? t.name || '수업' : '수업'; };
+  const lastHw = prevs.filter((l) => l.date === lastDate && String(l.homework || '').trim());
+  const lastLogs = prevs.filter((l) => l.date === lastDate && String(l.today || '').trim());
+  progress.prevDate = lastDate || null;
+  progress.prevHomework = lastHw.length > 1 ? lastHw.map((l) => `[${label(l)}] ${l.homework}`).join(' / ') : lastHw[0] ? lastHw[0].homework : '';
+  progress.prevToday = lastLogs.map((l) => `${lastLogs.length > 1 ? `[${label(l)}] ` : ''}${oneLine(l.today)}${l.repeat ? ' (다시 하기로 함)' : ''}`).join(' / ');
+  for (const t of tracks) { t.progress.prevHomework = progress.prevHomework; t.progress.prevToday = progress.prevToday; t.progress.prevDate = progress.prevDate; }
+  return { tracks, progress };
+}
