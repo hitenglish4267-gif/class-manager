@@ -1,6 +1,6 @@
 // 오늘 수업: 출석 → 미리 채워진 진도 확인 → 숙제 체크 (자동 저장)
 
-import { h, $, $$, api, icon, toast, outbox, saveLabel, saveState, kstToday, addDays, dowOf, hmOf, copyText, debounce } from './core.js';
+import { h, $, $$, api, icon, toast, outbox, saveLabel, saveState, kstToday, addDays, dowOf, hmOf, copyText, debounce, sheet, confirmBox } from './core.js';
 import { S, setDate, courseTabs } from './state.js';
 import { openMedia } from './media.js';
 
@@ -53,7 +53,7 @@ async function load() {
 }
 
 function makeModel(c) {
-  const m = { logs: {}, studs: {}, att: {}, on: null };
+  const m = { logs: {}, studs: {}, att: {}, on: null, son: {} };
   const logOf = (target, p) => ({
     target, curriculum_id: p.curriculum_id, lesson_id: p.lesson_id, seq: p.seq,
     today: p.today, next: p.next, homework: p.homework, repeat: p.repeat ? 1 : 0,
@@ -63,7 +63,10 @@ function makeModel(c) {
     for (const t of c.tracks) if (t.on) m.logs[t.target] = logOf(t.target, t.progress);
   } else if (c.type !== 'individual' && c.progress) m.logs[c.target] = logOf(c.target, c.progress);
   for (const s of c.students) {
-    if (c.type === 'individual' && s.progress) m.logs[s.target] = logOf(s.target, s.progress);
+    if (s.solo && s.tracks) {
+      m.son[s.id] = new Set(s.tracks.filter((t) => t.on).map((t) => t.key));
+      for (const t of s.tracks) if (t.on) m.logs[t.target] = logOf(t.target, t.progress);
+    }
     m.studs[s.id] = { hw: s.day.hw || '', comment: s.day.comment || '', tests: (s.tests || []).map((t) => ({ kind: t.kind, correct: t.correct ?? '', total: t.total ?? '', result: t.result || '', manual: false })) };
     m.att[s.id] = { att: s.day.att || '', reason: s.day.reason || '' };
   }
@@ -73,6 +76,10 @@ function makeModel(c) {
     if (Array.isArray(draft.body.tracks_on) && c.tracks) {
       m.on = new Set(draft.body.tracks_on);
       for (const t of c.tracks) if (!m.on.has(t.key)) delete m.logs[t.target];
+    }
+    for (const s of c.students) {
+      const k = draft.body.student_tracks_on && draft.body.student_tracks_on[s.id];
+      if (Array.isArray(k) && s.tracks) { m.son[s.id] = new Set(k); for (const t of s.tracks) if (!m.son[s.id].has(t.key)) delete m.logs[t.target]; }
     }
     for (const l of draft.body.logs || []) m.logs[l.target] = { ...l };
     for (const s of draft.body.students || []) if (m.studs[s.id]) m.studs[s.id] = { hw: s.hw, comment: s.comment, tests: Array.isArray(s.tests) ? s.tests : m.studs[s.id].tests };
@@ -181,6 +188,7 @@ function recordBody(c) {
   return {
     date: S.date, class_id: c.id,
     tracks_on: m.on ? [...m.on] : undefined,
+    student_tracks_on: Object.fromEntries(Object.entries(m.son).map(([k, v]) => [k, [...v]])),
     logs: Object.values(m.logs),
     students: c.students.map((s) => ({ id: s.id, hw: m.studs[s.id].hw, comment: m.studs[s.id].comment, tests: m.studs[s.id].tests || [] })),
   };
@@ -203,30 +211,31 @@ function todayText(l) { if (!l) return ''; const c = oneLine(l.content); return 
 
 // 반에 진도표가 여러 개일 때: 오늘 한 진도표 고르기 (요일 바꿈·둘 다·추가 학습)
 const DOW1 = ['일', '월', '화', '수', '목', '금', '토'];
-function tracksBlock(c) {
+function tracksBlock(c, student) {
   const m = cards.get(c.id);
-  const wrap = h('div');
-  const real = c.tracks.filter((t) => !t.free && t.curriculum_id);
+  const wrap = h('div', student ? { class: 'stu-tracks' } : null);
+  const list = student ? student.tracks : c.tracks;
+  const onSet = student ? m.son[student.id] : m.on;
   function paint() {
     const kids = [];
     const chip = (t) => {
       const dayTxt = t.free ? '' : t.days ? ` (${t.days.split(',').map((d) => DOW1[Number(d)]).join('·')})` : '';
-      return h('button', { class: 'chip-btn' + (m.on.has(t.key) ? ' on' : ''), onclick: () => {
-        if (m.on.has(t.key)) { m.on.delete(t.key); delete m.logs[t.target]; }
+      return h('button', { class: 'chip-btn' + (onSet.has(t.key) ? ' on' : ''), onclick: () => {
+        if (onSet.has(t.key)) { onSet.delete(t.key); delete m.logs[t.target]; }
         else {
-          m.on.add(t.key);
+          onSet.add(t.key);
           const p = t.progress || {};
           m.logs[t.target] = { target: t.target, curriculum_id: p.curriculum_id ?? t.curriculum_id, lesson_id: p.lesson_id, seq: p.seq, today: p.today || '', next: p.next || '', homework: p.homework || '', repeat: p.repeat ? 1 : 0 };
         }
         dirty(c, 600); paint();
       } }, t.free ? '+ 추가 학습 (영자신문 등)' : `${t.name || '진도표'}${dayTxt}`);
     };
-    if (real.length > 1 || c.tracks.some((t) => t.free)) {
-      kids.push(h('div', { class: 'track-pick' }, h('span', { class: 'small', style: { fontWeight: 650 } }, '오늘 수업'), ...c.tracks.filter((t) => t.free || t.curriculum_id || t.key === 'm').map(chip)));
-    }
-    const onTracks = c.tracks.filter((t) => m.on.has(t.key));
-    if (!onTracks.length) kids.push(h('div', { class: 'note small mt-s' }, '오늘 한 수업을 위에서 골라 주세요.'));
-    for (const t of onTracks) kids.push(progBlock(c, t.target, t.progress, null, t));
+    kids.push(h('div', { class: 'track-pick' }, h('span', { class: 'small', style: { fontWeight: 650 } }, student ? `${student.name} 오늘 교재` : '오늘 수업'),
+      ...list.filter((t) => t.free || t.curriculum_id || t.key === 'm').map(chip),
+      student ? h('button', { class: 'chip-btn', onclick: () => addStudentBook(c, student) }, '+ 교재 추가') : null));
+    const onTracks = list.filter((t) => onSet.has(t.key));
+    if (!onTracks.length) kids.push(h('div', { class: 'note small mt-s' }, student ? '오늘 한 교재를 위에서 골라 주세요.' : '오늘 한 수업을 위에서 골라 주세요.'));
+    for (const t of onTracks) kids.push(progBlock(c, t.target, t.progress, student, t));
     wrap.replaceChildren(...kids);
   }
   paint();
@@ -241,7 +250,7 @@ function progBlock(c, target, prog, student, track) {
   const box = h('div', { class: student ? 'stu-prog' : 'prog' });
 
   const prev = prog && prog.prevHomework;
-  const firstOn = !track || c.tracks.find((t) => cards.get(c.id).on.has(t.key)) === track;
+  const firstOn = !track || (student ? student.tracks.find((t) => cards.get(c.id).son[student.id].has(t.key)) : c.tracks.find((t) => cards.get(c.id).on.has(t.key))) === track;
   if (firstOn) {
     const pd = prog && prog.prevDate;
     if (prog && prog.prevToday) box.append(h('div', { class: 'lastx' }, `지난 수업${pd ? ` (${Number(pd.slice(5, 7))}/${Number(pd.slice(8, 10))})` : ''}: `, h('b', null, prog.prevToday)));
@@ -259,7 +268,12 @@ function progBlock(c, target, prog, student, track) {
   } }), '이번 차시 다시 (진도 못 나감)');
 
   const top = h('div', { class: 'prog-top' });
-  if (student) {
+  if (student && track && track.free) {
+    top.append(h('span', { class: 'chip line' }, '추가 학습 (직접 쓰기)'));
+  } else if (student && track && track.key !== 'm') {
+    const cur = curOf(curId);
+    top.append(h('span', { class: 'chip line' }, cur ? cur.name : '교재'), h('button', { class: 'btn small ghost', onclick: () => removeStudentBook(c, student, track) }, '이 교재 빼기'));
+  } else if (student) {
     const courseId = c.course_id || student.course_id;
     const opts = S.meta.curricula.filter((x) => !courseId || x.course_id === courseId || x.id === curId);
     top.append(h('select', { class: 'input', style: { flex: '1 1 160px' }, onchange: (e) => changeStudentCurriculum(c, student, Number(e.target.value) || null) },
@@ -316,6 +330,44 @@ async function changeStudentCurriculum(c, s, curId) {
   load();
 }
 
+// ───────── 학생 개별 진도 ─────────
+async function toggleSolo(c, s) {
+  await outbox.flush(recKey(c.id));
+  if (!s.solo) {
+    // 처음 켜면: 반에서 하던 교재·차시에서 이어서 시작
+    const p = c.progress || {};
+    const body = { student_id: s.id, solo: true };
+    if (!s.curriculum_id) Object.assign(body, { curriculum_id: p.curriculum_id || c.curriculum_id || null, start_seq: p.seq ?? null, date: S.date });
+    await api('/api/student-curriculum', body);
+    toast(`${s.name}: 개별 진도로 바꿨어요. 이제 이 학생만 다른 책·진도를 쓸 수 있어요.`);
+  } else {
+    await api('/api/student-curriculum', { student_id: s.id, solo: false });
+    toast(`${s.name}: 반 진도로 돌아갔어요`);
+  }
+  load();
+}
+function addStudentBook(c, s) {
+  sheet(`${s.name} · 교재 추가`, (close) => {
+    const sel = h('select', { class: 'input' }, h('option', { value: '' }, '교재(진도표) 고르기'),
+      S.meta.courses.map((co) => { const l = S.meta.curricula.filter((x) => x.course_id === co.id); return l.length ? h('optgroup', { label: co.name }, l.map((x) => h('option', { value: x.id }, x.name))) : null; }),
+      (() => { const l = S.meta.curricula.filter((x) => !S.meta.courses.some((co) => co.id === x.course_id)); return l.length ? h('optgroup', { label: '과정 없음' }, l.map((x) => h('option', { value: x.id }, x.name))) : null; })());
+    return h('div', { class: 'stack' },
+      h('p', { class: 'small muted', style: { margin: 0 } }, '이 학생이 함께 나가는 교재를 더해요. 진도는 교재마다 따로 이어져요. 목록에 없는 교재는 먼저 진도표 탭에서 만들어 주세요.'),
+      sel,
+      h('div', { class: 'row', style: { justifyContent: 'flex-end' } }, h('button', { class: 'btn primary', onclick: async () => {
+        if (!sel.value) return toast('교재를 골라 주세요', true);
+        await outbox.flush(recKey(c.id));
+        try { await api('/api/student-curriculum', { student_id: s.id, add_track: { curriculum_id: Number(sel.value) } }); close(); toast('교재를 더했어요'); load(); } catch (e) { toast(e.message, true); }
+      } }, '더하기')));
+  });
+}
+async function removeStudentBook(c, s, t) {
+  if (!(await confirmBox(`${t.name || '이 교재'}를 뺄까요?`, '지난 수업 기록은 그대로 남아요. 나중에 다시 더하면 처음 차시부터 시작해요.', '빼기', true))) return;
+  await outbox.flush(recKey(c.id));
+  await api('/api/student-curriculum', { student_id: s.id, remove_track: t.key, date: S.date });
+  toast('교재를 뺐어요'); load();
+}
+
 // ───────── 학생 줄 ─────────
 function sendStatus(c, s) {
   const m = cards.get(c.id);
@@ -364,7 +416,10 @@ function studentRow(c, s) {
     h('button', { class: 'btn small ghost', onclick: () => { comment.classList.toggle('hidden'); if (!comment.classList.contains('hidden')) comment.focus(); } }, icon('pen'), '선생님 한마디'),
     mediaBtn, linkBtn));
   row.append(comment);
-  if (c.type === 'individual') row.append(progBlock(c, s.target, s.progress, s));
+  if (c.type !== 'individual') {
+    row.querySelector('.stu-tools').append(h('button', { class: 'btn small ghost', onclick: () => toggleSolo(c, s) }, s.solo ? '반 진도로 돌아가기' : '개별 진도·교재'));
+  }
+  if (s.solo && s.tracks) row.append(tracksBlock(c, s));
   paintAtt(); paintHw();
   return row;
 }

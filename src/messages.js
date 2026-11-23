@@ -67,7 +67,7 @@ export function lateVars(cls, day) {
 
 /** 일간·미제출·출결 알림에 쓰는 값들 */
 export function dailyVars(settings, env, cls, st, date) {
-  const prog = (cls.type === 'individual' ? st.progress : cls.progress) || {};
+  const prog = (st.solo ? st.progress : cls.progress) || {};
   const day = st.day || {};
   const base = { 학원: settings.academy || '', 학생명: st.name };
   const seed = `${st.id}|${date}`;
@@ -158,7 +158,9 @@ async function periodVars(env, settings, kind, ref) {
     const rate = total ? Math.round((cnt.done / total) * 100) : null;
     const lessonLogs = [];
     for (const r of attended) {
-      if (classType.get(r.class_id) === 'individual') { const l = logMap.get(`${r.date}|s${s.id}`); if (l) lessonLogs.push(l); }
+      // 그날 학생 개별 기록이 있으면 그걸, 없으면 반 기록
+      const mine = logs.filter((l) => l.date === r.date && (l.target === `s${s.id}` || l.target.startsWith(`s${s.id}t`)));
+      if (mine.length || classType.get(r.class_id) === 'individual') lessonLogs.push(...mine);
       else for (const l of logs) if (l.date === r.date && (l.target === `c${r.class_id}` || l.target.startsWith(`c${r.class_id}t`))) lessonLogs.push(l);
     }
     const titles = lessonLogs.map((l) => String(l.today || '').split(' · ')[0]).filter(Boolean);
@@ -237,7 +239,7 @@ async function hw5Items(env, settings, ref) {
       const recent = rows.slice(-HW5_COUNT);
       const lines = [];
       for (const r of recent) {
-        const target = r.class_type === 'individual' ? `s${st.id}` : `c${r.class_id}`;
+        const target = st.solo ? `s${st.id}` : `c${r.class_id}`;
         const prevDay = await first(env, "SELECT MAX(date) AS d FROM logs WHERE (target = ? OR target LIKE ?) AND date < ?", target, `${target}t%`, r.date);
         const hwLogs = prevDay && prevDay.d ? await all(env, "SELECT homework FROM logs WHERE (target = ? OR target LIKE ?) AND date = ?", target, `${target}t%`, prevDay.d) : [];
         const hwName = hwLogs.map((l) => oneLine(l.homework || '')).filter(Boolean).join(' / ') || '숙제';

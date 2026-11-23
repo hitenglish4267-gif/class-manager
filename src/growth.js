@@ -77,16 +77,18 @@ const prevWord = (w) => (w === 2 ? '지난 2주' : '지난주');
 function targetFor(classType, classId, studentId) { return classType === 'individual' ? `s${studentId}` : `c${classId}`; }
 /** 그날 그 학생의 진도 기록들 (반에 진도표가 여러 개면 여러 개) */
 function logsOf(cur, date, s, classId) {
-  if (s.class_type === 'individual') { const l = cur.logs.get(`${date}|s${s.id}`); return l ? [l] : []; }
+  const mine = cur.studentLogs.get(`${date}|${s.id}`);
+  if (mine && mine.length) return mine;
+  if (s.class_type === 'individual') return [];
   return cur.classLogs.get(`${date}|${classId}`) || [];
 }
 const pct = (c, t) => (t ? Math.round((c / t) * 100) : null);
 const fmt = (n) => (n == null || n === '' ? '' : String(+Number(n).toFixed(1)));
 
-function byClassDay(logs) {
+function byClassDay(logs, p = 'c') {
   const m = new Map();
   for (const l of logs) {
-    const g = String(l.target).match(/^c(\d+)(?:t(\d+|x))?$/);
+    const g = String(l.target).match(p === 's' ? /^s(\d+)(?:t(\d+|x))?$/ : /^c(\d+)(?:t(\d+|x))?$/);
     if (!g) continue;
     const k = `${l.date}|${g[1]}`;
     if (!m.has(k)) m.set(k, []);
@@ -106,7 +108,7 @@ async function rangeData(env, from, to) {
     all(env, "SELECT student_id, date, type, comment FROM works WHERE date >= ? AND date <= ? AND include = 1 AND comment != '' ORDER BY date, id", from, to).catch(() => []),
   ]);
   const by = (rows, key = 'student_id') => { const m = new Map(); for (const r of rows) { if (!m.has(r[key])) m.set(r[key], []); m.get(r[key]).push(r); } return m; };
-  return { days: by(days), tests: by(tests), evals: by(evals), notes: by(notes), media: by(media), works: by(works), logs: new Map(logs.map((l) => [`${l.date}|${l.target}`, l])), classLogs: byClassDay(logs) };
+  return { days: by(days), tests: by(tests), evals: by(evals), notes: by(notes), media: by(media), works: by(works), logs: new Map(logs.map((l) => [`${l.date}|${l.target}`, l])), classLogs: byClassDay(logs), studentLogs: byClassDay(logs, 's') };
 }
 
 function evalSummary(rows, itemName) {
@@ -172,6 +174,8 @@ export function buildFacts(settings, s, cur, prev, period) {
   // 진도표마다 가장 최근 기록의 다음 차시
   const latest = new Map();
   for (const d of days) for (const l of logsOf(cur, d.date, s, d.class_id)) if (!l.target.endsWith('tx')) latest.set(l.target, l);
+  // 개별 진도로 바꾼 학생은 반 진도의 다음 차시는 빼기
+  if ([...latest.keys()].some((t) => t.startsWith('s'))) for (const t of [...latest.keys()]) if (t.startsWith('c')) latest.delete(t);
   const nexts = [...latest.values()].map((l) => ({ book: l.book, text: l.repeat ? oneLine(l.today) : oneLine(l.next) })).filter((x) => x.text);
   const nextPlan = lastNote ? lastNote.next_plan : nexts.length > 1 ? nexts.map((x) => `${x.book ? `[${x.book}] ` : ''}${x.text}`).join(' / ') : nexts[0] ? nexts[0].text : '';
 
