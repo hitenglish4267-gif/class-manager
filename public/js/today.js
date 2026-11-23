@@ -242,7 +242,11 @@ function progBlock(c, target, prog, student, track) {
 
   const prev = prog && prog.prevHomework;
   const firstOn = !track || c.tracks.find((t) => cards.get(c.id).on.has(t.key)) === track;
-  if (firstOn) box.append(h('div', { class: 'lastx' }, '지난 숙제: ', h('b', null, prev || '없음')));
+  if (firstOn) {
+    const pd = prog && prog.prevDate;
+    if (prog && prog.prevToday) box.append(h('div', { class: 'lastx' }, `지난 수업${pd ? ` (${Number(pd.slice(5, 7))}/${Number(pd.slice(8, 10))})` : ''}: `, h('b', null, prog.prevToday)));
+    box.append(h('div', { class: 'lastx' }, '지난 숙제: ', h('b', null, prev || '없음')));
+  }
 
   const today = h('textarea', { class: 'input', rows: 2, value: log.today, placeholder: '오늘 할 일', oninput: () => { log.today = today.value; dirty(c); } });
   const next = h('input', { class: 'input', value: log.next, placeholder: '다음 수업', oninput: () => { log.next = next.value; dirty(c); } });

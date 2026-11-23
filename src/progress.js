@@ -42,12 +42,13 @@ export function nextText(lesson) { return lesson ? lesson.title || '' : ''; }
 export function computeProgress(assign, cur, todayLog, prevLog) {
   const prevHomework = prevLog ? prevLog.homework || '' : '';
   const prevDate = prevLog ? prevLog.date : null;
+  const prevToday = prevLog ? oneLine(prevLog.today || '') + (prevLog.repeat ? ' (다시 하기로 함)' : '') : '';
   if (todayLog) {
     const lesson = cur?.lessons.find((l) => l.id === todayLog.lesson_id) || null;
     return {
       saved: true, curriculum_id: todayLog.curriculum_id, lesson_id: todayLog.lesson_id,
       seq: todayLog.seq, today: todayLog.today || '', next: todayLog.next || '', homework: todayLog.homework || '',
-      repeat: todayLog.repeat ? 1 : 0, content: lesson ? lesson.content || '' : '', prevHomework, prevDate, ended: false,
+      repeat: todayLog.repeat ? 1 : 0, content: lesson ? lesson.content || '' : '', prevHomework, prevDate, prevToday, ended: false,
     };
   }
   let lesson = null;
@@ -68,7 +69,7 @@ export function computeProgress(assign, cur, todayLog, prevLog) {
   return {
     saved: false, curriculum_id: cur ? cur.id : null, lesson_id: lesson ? lesson.id : null, seq: lesson ? lesson.seq : null,
     today: todayText(lesson), next: nextText(nxt), homework: lesson ? lesson.homework || '' : '', repeat: 0,
-    content: lesson ? lesson.content || '' : '', prevHomework, prevDate,
+    content: lesson ? lesson.content || '' : '', prevHomework, prevDate, prevToday,
     ended: !!(cur && cur.lessons.length && !lesson),
   };
 }

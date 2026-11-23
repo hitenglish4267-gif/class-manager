@@ -77,7 +77,9 @@ export async function buildDay(env, date, opts = {}) {
       const lastHw = prevs.filter((l) => l.date === lastDate && String(l.homework || '').trim());
       cls.progress.prevDate = lastDate || null;
       cls.progress.prevHomework = lastHw.length > 1 ? lastHw.map((l) => { const t = cls.tracks.find((x) => x.target === l.target); return `[${t ? t.name || '수업' : '수업'}] ${l.homework}`; }).join(' / ') : lastHw[0] ? lastHw[0].homework : '';
-      for (const t of cls.tracks) t.progress.prevHomework = cls.progress.prevHomework;
+      const lastLogs = prevs.filter((l) => l.date === lastDate && String(l.today || '').trim());
+      cls.progress.prevToday = lastLogs.map((l) => { const t = cls.tracks.find((x) => x.target === l.target); return `${lastLogs.length > 1 ? `[${t ? t.name || '수업' : '수업'}] ` : ''}${String(l.today).replace(/\s*\n+\s*/g, ' / ')}${l.repeat ? ' (다시 하기로 함)' : ''}`; }).join(' / ');
+      for (const t of cls.tracks) { t.progress.prevHomework = cls.progress.prevHomework; t.progress.prevToday = cls.progress.prevToday; t.progress.prevDate = cls.progress.prevDate; }
     }
     cls.students = c.students.map((s) => {
       const st = {
