@@ -68,17 +68,27 @@ async function call(env, method, path, body, mode = 'apikey') {
     body: body ? JSON.stringify(body) : undefined,
   });
   let res;
-  if (mode === 'oauth2') {
-    res = await send(`Bearer ${await getAccessToken(env)}`);
-    // 401 = Access Token 만료 → 한 번만 새로 받아서 다시
-    if (res.status === 401) res = await send(`Bearer ${await getAccessToken(env, { force: true })}`);
-  } else {
-    res = await send(await apiKeyHeader(env));
+  // 520~526: Cloudflare ↔ 솔라피 서버 사이 연결 문제 (요청이 솔라피에 닿지 않음) → 잠깐 쉬고 다시 (최대 3번)
+  for (let attempt = 0; ; attempt++) {
+    try {
+      if (mode === 'oauth2') {
+        res = await send(`Bearer ${await getAccessToken(env)}`);
+        // 401 = Access Token 만료 → 한 번만 새로 받아서 다시
+        if (res.status === 401) res = await send(`Bearer ${await getAccessToken(env, { force: true })}`);
+      } else {
+        res = await send(await apiKeyHeader(env));
+      }
+    } catch (e) {
+      if (attempt < 3) { await new Promise((r) => setTimeout(r, 1500 * (attempt + 1))); continue; }
+      throw new Error(`솔라피 서버에 연결하지 못했어요 (${e.message}). 잠시 뒤 다시 보내 주세요.`);
+    }
+    if (res.status >= 520 && res.status <= 526 && attempt < 3) { await new Promise((r) => setTimeout(r, 1500 * (attempt + 1))); continue; }
+    break;
   }
   let data = null;
   try { data = await res.json(); } catch { data = null; }
   if (!res.ok) {
-    const msg = (data && (data.errorMessage || data.message || data.errorCode)) || `HTTP ${res.status}`;
+    const msg = (data && (data.errorMessage || data.message || data.errorCode)) || (res.status >= 520 && res.status <= 526 ? `솔라피 서버 연결 문제 (HTTP ${res.status}) — 잠시 뒤 다시 보내 주세요` : `HTTP ${res.status}`);
     const e = new Error(msg); e.status = res.status; throw e;
   }
   return data;
