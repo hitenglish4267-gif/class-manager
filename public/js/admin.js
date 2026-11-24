@@ -423,7 +423,7 @@ function secSend() {
   const pf = h('input', { class: 'input', value: k.pfId, placeholder: 'KA01PF…', oninput: () => { k.pfId = pf.value.trim(); saveKakao(); } });
   const styleSeg = h('div', { class: 'seg' }, [['basic', '전체 기본형'], ['cushion', '전체 쿠션형']].map(([v, l]) => h('button', { 'aria-pressed': String(k.style === v), onclick: (e) => { k.style = v; for (const b of styleSeg.children) b.setAttribute('aria-pressed', String(b === e.currentTarget)); saveKakao(); } }, l)));
   const tplBox = h('div', { class: 'stack' });
-  const KINDS = ['daily', 'missing', 'hw5', 'growth', 'weekly', 'monthly', 'att', 'late'];
+  const KINDS = ['daily', 'daily_photo', 'missing', 'hw5', 'growth', 'weekly', 'monthly', 'att', 'late'];
   const basicOnly = A.defaults.basicOnly || [];
   const drawTpl = () => {
     tplBox.replaceChildren(...KINDS.map((kind) => h('div', { class: 'card card-pad', style: { boxShadow: 'none', background: '#fbfaf7' } },

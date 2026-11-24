@@ -355,11 +355,14 @@ function chooseKakao(settings, kind, style) {
 /** 성장 리포트 버튼 주소의 #{리포트코드}는 "버튼 링크 주소" 칸을 비워 둬도 항상 넘기기 */
 function withButtonVars(kind, variables, vars) {
   if (kind === 'growth' && vars && vars.리포트코드 && !variables['#{리포트코드}']) return { ...variables, '#{리포트코드}': vars.리포트코드 };
+  if (kind === 'daily_photo' && vars && vars.사진코드 && !variables['#{사진코드}']) return { ...variables, '#{사진코드}': vars.사진코드 };
   return variables;
 }
 
 export function buildSendItem(settings, kind, key, to, text, vars, studentStyle) {
-  const style = studentStyle || settings.kakao.style || 'basic';
+  // 사진·영상이 있는 날 일간 리포트는 "사진·영상 보기" 버튼이 있는 템플릿으로 (그 템플릿을 넣어 둔 경우)
+  if (kind === 'daily' && vars && vars.사진링크 && chooseKakao(settings, 'daily_photo', 'basic')) kind = 'daily_photo';
+  const style = kind === 'daily_photo' ? 'basic' : studentStyle || settings.kakao.style || 'basic';
   const tpl = chooseKakao(settings, kind, style);
   return {
     key, to, text,
@@ -391,6 +394,7 @@ export async function sendMessages(env, ids, opts = {}) {
     let vars = {};
     try { vars = JSON.parse(m.vars || '{}'); } catch { /* 빈 값 */ }
     vars = applyOverride(vars, oMap.get(m.id));
+    if (m.photo_off) vars.사진링크 = '';
     // 문자를 쓰는 학원에서만: 직접 고친 메시지는 알림톡 틀에 맞출 수 없으니 문자로 보내요
     if (m.edited && !only) return { key: m.id, to: s.phone, text: m.text, kakao: null, style: 'sms' };
     return buildSendItem(settings, m.kind, m.id, s.phone, m.text, vars, s.msg_style);

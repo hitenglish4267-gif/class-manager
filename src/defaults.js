@@ -306,11 +306,38 @@ export const RECOMMENDED_KAKAO = {
 
 문의: #{학원연락처}`,
   },
+  daily_photo: {
+    basic: `[파머스 어학원]
+일간 학습 안내
+
+#{학생명} 학생 보호자님, 안녕하세요.
+오늘 진행된 수업의 학습 내용을 안내드립니다.
+
+■ 수업일
+#{수업일}
+
+■ 오늘의 학습 내용
+#{오늘학습}
+
+■ 수업 참여 및 학습 성취
+#{학습성취}
+
+■ 다음 수업 계획
+#{다음학습}
+
+■ 숙제 안내
+#{숙제내용}
+
+오늘 수업 사진·영상은 아래 버튼에서 확인하실 수 있습니다.
+
+본 메시지는 재원생의 당일 수업 기록을 바탕으로 등록된 보호자께 발송되는 학습 안내입니다.
+문의: #{학원연락처}`,
+  },
 };
 
-export const KIND_LABELS = { daily: '일간 리포트', missing: '미제출 알림', weekly: '주간 리포트', monthly: '월간 리포트', att: '출결 즉시 알림', late: '지각 즉시 알림', hw5: '숙제 누적 5회 알림', growth: '성장 리포트 (2주)' };
+export const KIND_LABELS = { daily: '일간 리포트', missing: '미제출 알림', weekly: '주간 리포트', monthly: '월간 리포트', att: '출결 즉시 알림', late: '지각 즉시 알림', hw5: '숙제 누적 5회 알림', growth: '성장 리포트 (2주)', daily_photo: '일간 리포트 (사진·영상 있는 날)' };
 /** 쿠션형 없이 기본형만 쓰는 종류 */
-export const BASIC_ONLY_KINDS = ['late', 'hw5', 'growth'];
+export const BASIC_ONLY_KINDS = ['late', 'hw5', 'growth', 'daily_photo'];
 
 // 알림톡 칸 이름 → 앱 안의 값 이름 (칸 이름이 조금 달라도 알아듣게)
 const ALIAS = {

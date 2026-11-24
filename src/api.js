@@ -326,9 +326,12 @@ async function listMessages(env, me, url) {
     const override = oMap.has(r.id) ? oMap.get(r.id) : null;
     const baseComment = kind === 'weekly' || kind === 'monthly' ? (vars.코멘트 || '') : (vars.선생님한마디 || '');
     vars = applyOverride(vars, override);
+    const hasPhoto = !!vars.사진링크;
+    if (r.photo_off) vars.사진링크 = '';
     const item = r.edited && !only ? { kakao: null, style: 'sms' } : buildSendItem(settings, kind, r.id, r.phone, r.text, vars, r.msg_style);
     return {
       comment: override != null ? override : baseComment, overridden: override != null, noTemplate: only && !item.kakao,
+      has_photo: hasPhoto, photo_off: !!r.photo_off, photo_tpl: item.kakao && item.kakao.templateId && (settings.kakao.templates || []).some((t) => t.kind === 'daily_photo' && t.templateId === item.kakao.templateId),
       id: r.id, student_id: r.student_id, student_name: r.student_name, class_name: r.class_name, class_id: r.class_id, course_id: r.course_id,
       text: r.text, edited: r.edited, checked: r.checked, locked: r.locked, note: r.note, status: r.status,
       sent_at: r.sent_at, error: r.error, channel: r.channel, phone: r.phone,
@@ -484,6 +487,7 @@ async function sentHistory(env, me, url) {
     if (seen.has(r.id) || (vis && !vis.has(r.student_id))) continue;
     seen.add(r.id);
     let vars = {}; try { vars = JSON.parse(r.vars || '{}'); } catch { /* */ }
+    if (r.photo_off) vars.사진링크 = '';
     const item = buildSendItem(settings, r.kind, r.id, r.phone, r.text, vars, r.msg_style);
     const tpl = item.kakao ? (settings.kakao.templates || []).find((t) => t.templateId === item.kakao.templateId) : null;
     list.push({ id: r.id, kind: r.kind, kind_label: KIND_LABELS[r.kind] || r.kind, ref: r.ref, student: r.student_name, class_name: r.class_name || '',
@@ -877,6 +881,13 @@ export async function handleApi(request, env, ctx, url, version) {
     'POST /api/messages/override': () => overrideMessage(env, me, body),
     'POST /api/messages/send': () => sendNow(env, me, body),
     'GET /api/messages/sent': () => sentHistory(env, me, url),
+    'POST /api/messages/photo': async () => {
+      const m = await first(env, 'SELECT id, student_id FROM messages WHERE id = ?', Number(body.id));
+      if (!m) throw bad('메시지를 찾을 수 없어요');
+      await assertStudent(env, me, m.student_id);
+      await run(env, 'UPDATE messages SET photo_off = ? WHERE id = ?', body.off ? 1 : 0, m.id);
+      return { ok: true };
+    },
     'GET /api/lessons': () => lessonsOf(env, url),
     'GET /api/media': async () => { await assertStudent(env, me, url.searchParams.get('student_id')); return { list: await mediaList(env, Number(url.searchParams.get('student_id')), url.searchParams.get('date')) }; },
     'POST /api/media/start': async () => { await assertStudent(env, me, body.student_id); return mediaStart(env, body); },
