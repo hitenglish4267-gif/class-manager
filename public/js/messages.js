@@ -163,6 +163,12 @@ export async function renderMessages(main) {
       m.noTemplate
         ? h('div', { class: 'note bad small' }, '이 종류의 알림톡 템플릿이 아직 없어서 보낼 수 없어요. 관리 → 발송 방식에서 카카오 승인을 받은 템플릿을 등록해 주세요.')
         : pre,
+      kind === 'daily' && m.has_photo ? h('div', { class: 'row mt-s photo-row' },
+        h('span', { class: 'chip ' + (m.photo_off ? '' : 'ok') }, m.photo_off ? '📷 사진·영상 빼고 보냄' : m.photo_tpl ? '📷 사진·영상 버튼 포함' : '📷 사진·영상 있음'),
+        !m.photo_off && !m.photo_tpl ? h('span', { class: 'tiny muted' }, '사진 버튼 템플릿이 승인되면 버튼이 함께 가요') : null,
+        m.status !== 'sent' ? h('button', { class: 'btn small ghost', onclick: async () => {
+          await api('/api/messages/photo', { id: m.id, off: !m.photo_off }); toast(m.photo_off ? '사진·영상을 넣었어요' : '사진·영상을 뺐어요'); load();
+        } }, m.photo_off ? '사진 넣기' : '사진 빼기') : null) : null,
       h('label', { class: 'field mt-s' }, h('span', { class: 'lbl' }, isPeriod ? '선생님 코멘트' : '선생님 한마디', h('span', { class: 'tiny muted', style: { fontWeight: 500 } }, ' — 알림톡 문구 안의 이 칸만 고칠 수 있어요')), inp),
       m.status === 'failed' && m.error ? h('div', { class: 'note bad small mt-s' }, '실패 이유: ', m.error, ' — 발송 시간에 한 번 더 자동으로 보내요.') : null,
       h('div', { class: 'msg-foot' }, saveSt,

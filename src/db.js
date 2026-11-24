@@ -44,6 +44,7 @@ const MIGRATIONS = [
   "ALTER TABLE classes ADD COLUMN cur_days TEXT DEFAULT ''",
   "ALTER TABLE classes ADD COLUMN tracks TEXT DEFAULT ''",
   "ALTER TABLE students ADD COLUMN solo INTEGER DEFAULT 0",
+  "ALTER TABLE messages ADD COLUMN photo_off INTEGER DEFAULT 0",
   "ALTER TABLE students ADD COLUMN tracks TEXT DEFAULT ''",
   "ALTER TABLE students ADD COLUMN cur_days TEXT DEFAULT ''",
 ];
