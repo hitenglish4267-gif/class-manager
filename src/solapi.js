@@ -122,8 +122,14 @@ export async function sendBatch(env, items, opts = {}) {
 
   async function run(list, asSms) {
     const failedKakao = [];
-    for (let i = 0; i < list.length; i += 500) {
-      const chunk = list.slice(i, i + 500);
+    // 하루 발송 한도를 넘으면 솔라피는 그 묶음 전체를 거절해요.
+    // 그래서 20건씩 나눠 보내고, 한도에 걸린 묶음은 1건씩 다시 보내 한도까지는 최대한 나가게 해요.
+    const queue = [];
+    for (let i = 0; i < list.length; i += 20) queue.push(list.slice(i, i + 20));
+    let limitHit = '';
+    while (queue.length) {
+      const chunk = queue.shift();
+      if (limitHit) { for (const it of chunk) results.set(it.key, { ok: false, channel: asSms || !it.kakao ? 'sms' : 'kakao', error: limitHit }); continue; }
       let data;
       try {
         data = await call(env, 'POST', '/messages/v4/send-many/detail', {
@@ -133,6 +139,12 @@ export async function sendBatch(env, items, opts = {}) {
         if (e instanceof OAuthError) {
           // 토큰 문제는 문자로 바꿔 보내도 똑같이 실패하니 바로 실패 처리
           for (const it of chunk) results.set(it.key, { ok: false, channel: '', error: `OAuth2 토큰 문제: ${e.message}` });
+          continue;
+        }
+        if (/발송량|발송 한도|한도|limit/i.test(String(e.message))) {
+          if (chunk.length > 1) { queue.unshift(...chunk.map((it) => [it])); continue; }
+          limitHit = `오늘 솔라피 하루 발송 한도를 다 써서 보내지 못했어요 (${e.message}). 내일 다시 보내 주세요.`;
+          for (const it of chunk) results.set(it.key, { ok: false, channel: asSms || !it.kakao ? 'sms' : 'kakao', error: limitHit });
           continue;
         }
         for (const it of chunk) {
