@@ -434,7 +434,8 @@ export async function attendanceAlert(env, studentId, date, att) {
   // 안전장치: 출석·결석 알림에 "지각" 문구 템플릿이 걸려 있으면 절대 보내지 않기
   if (att !== 'late') {
     const t = chooseKakao(settings, 'att', st.msg_style || settings.kakao.style || 'basic');
-    if (t && /지각/.test(t.text || '')) {
+    const usedElsewhere = t && ((settings.kakao || {}).templates || []).some((x) => x.kind !== 'att' && x.templateId === t.templateId);
+    if (t && (/지각/.test(t.text || '') || usedElsewhere || /ZwKp9zYN$/.test(t.templateId))) {
       await env.DB.prepare('UPDATE att_alerts SET status = ?, sent_at = ?, error = ? WHERE date = ? AND student_id = ?')
         .bind('failed', kstNow().stamp, '출결 알림 칸에 지각 템플릿이 들어 있어 보내지 않았어요', date, studentId).run();
       return;
