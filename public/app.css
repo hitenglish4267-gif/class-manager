@@ -357,3 +357,10 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-
 .stu-tracks { margin-top: 10px; border: 1px solid var(--line); border-radius: var(--radius-s); background: #fbfaf7; padding-bottom: 4px; }
 .stu-tracks .track-pick { padding: 10px 12px 0; }
 .stu-tracks .stu-prog { border: 0; margin-top: 0; }
+
+/* 보낸 내역 */
+.sent-row { margin-bottom: 6px; padding: 10px 14px; }
+.sent-text { white-space: pre-wrap; font: inherit; font-size: 13.5px; background: #fbfaf7; border-radius: 10px; padding: 10px 12px; margin: 8px 0 0; color: var(--ink-2); }
+/* 메시지 종류 탭이 많아도 화면이 옆으로 밀리지 않게 */
+.toolbar > .seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.toolbar > .seg::-webkit-scrollbar { display: none; }

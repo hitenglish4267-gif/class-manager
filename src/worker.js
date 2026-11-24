@@ -103,7 +103,7 @@ export async function runSchedule(env, nowMs = Date.now()) {
   }
 
   const diff = mins - hmToMin(sch.send);
-  if (sch.auto_send && diff >= 0 && diff < 120 && await claimJob(env, 'send', now.date)) {
+  if (!manual && sch.auto_send && diff >= 0 && diff < 120 && await claimJob(env, 'send', now.date)) {
     if (await claimJob(env, 'preview', now.date)) await makePreviews(env, settings, now);
     await generate(env, 'daily', now.date, { settings }); // 보내기 직전 최신 기록으로
     await sendMessages(env, await idsToSend(env, 'daily', now.date), { auto: true });
@@ -138,7 +138,7 @@ export async function runSchedule(env, nowMs = Date.now()) {
   const refs = await processQueue(env, { settings });
   for (const ref of refs) await generate(env, 'growth', ref, { settings });
   const gdiff = mins - hmToMin(g.send);
-  if (isGrowthDay && g.auto && gdiff >= 0 && gdiff < 120 && await claimJob(env, 'growth-send', now.date)) {
+  if (!manual && isGrowthDay && g.auto && gdiff >= 0 && gdiff < 120 && await claimJob(env, 'growth-send', now.date)) {
     await sendMessages(env, await idsToSend(env, 'growth', now.date), { auto: true });
   }
 

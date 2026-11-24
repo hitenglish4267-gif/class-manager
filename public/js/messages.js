@@ -3,7 +3,9 @@
 import { h, api, icon, toast, outbox, saveLabel, kstToday, addDays, dateLabel, hmOf, confirmBox, debounce, sheet, copyText, dowOf } from './core.js';
 import { S, setDate, courseTabs } from './state.js';
 
-const KINDS = [['daily', '일간'], ['missing', '미제출'], ['hw5', '숙제 5회'], ['growth', '성장 리포트'], ['weekly', '주간'], ['monthly', '월간']];
+const KINDS = [['daily', '일간'], ['missing', '미제출'], ['hw5', '숙제 5회'], ['growth', '성장 리포트'], ['weekly', '주간'], ['monthly', '월간'], ['sent', '보낸 내역']];
+const manual = () => !S.meta.send_policy || S.meta.send_policy.director_only !== false;
+const canSend = () => !manual() || S.me.role === 'director';
 const saturdayOf = (d) => { const w = dowOf(d); return w === 0 ? addDays(d, -1) : addDays(d, 6 - w); };
 /** 성장 리포트 기준 토요일 (2주마다면 기준일과 짝이 맞는 토요일로) — 서버 periodFor와 같은 계산 */
 function growthRef(d) {
@@ -29,6 +31,7 @@ export async function renderMessages(main) {
     ref = k === 'monthly' ? (sessionStorage.getItem('cm_msg_month') || S.date.slice(0, 7)) : S.date;
     renderMessages(main);
   } }, label)));
+  if (kind === 'sent') return renderSent(main, seg);
   const refInput = kind === 'monthly'
     ? h('input', { type: 'month', class: 'input', style: { width: 'auto' }, value: ref, onchange: async (e) => { await outbox.flushAll(); sessionStorage.setItem('cm_msg_month', e.target.value); renderMessages(main); } })
     : h('div', { class: 'datebar' },
@@ -42,6 +45,9 @@ export async function renderMessages(main) {
   const list = h('div', null, h('div', { class: 'empty' }, '불러오는 중…'));
   const info = h('div');
   main.replaceChildren(h('div', { class: 'toolbar' }, seg, refInput), info, tabs, summary, bar, list);
+  if (manual()) info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } }, S.me.role === 'director'
+    ? '자동 발송은 꺼져 있어요. 내용을 확인하고 체크한 뒤 "지금 보내기"를 눌러야 학부모님께 알림톡이 가요.'
+    : '알림톡은 원장님이 확인하고 보내요. 선생님은 내용을 확인하고 체크만 해 두시면 돼요.'));
 
   const sch = S.meta.schedule;
   if (kind === 'weekly') info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } },
@@ -53,10 +59,10 @@ export async function renderMessages(main) {
     info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } },
       `${addDays(ref, two ? -12 : -5).slice(5).replace('-', '/')}(월) ~ ${addDays(ref, -1).slice(5).replace('-', '/')}(금) ${two ? '2주' : '한 주'} 기록으로 만든 리포트예요. `,
       `${two ? '2주마다' : '매주'} ${'일월화수목금토'[g.day ?? 6]}요일 ${g.gen || '07:00'}부터 AI가 몇 명씩 써요. 내용을 확인하고 "승인"을 체크하면 `,
-      g.auto ? `${g.send || '12:00'}에 승인된 리포트만 자동으로 보내요.` : '"지금 보내기"로 보내 주세요.'));
+      !manual() && g.auto ? `${g.send || '12:00'}에 승인된 리포트만 자동으로 보내요.` : '원장님이 확인하고 "지금 보내기"를 누르면 보내져요.'));
   }
   if (kind === 'hw5') info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } },
-    `숙제 미제출·미흡이 (지난 알림을 보낸 뒤로) 5회가 된 학생이 그날 자동으로 들어와요. ${sch.hw5_auto ? `${sch.send}에 자동 발송돼요.` : '확인하고 직접 보내 주세요.'} 보내고 나면 횟수는 처음부터 다시 세요.`));
+    `숙제 미제출·미흡이 (지난 알림을 보낸 뒤로) 5회가 된 학생이 그날 자동으로 들어와요. ${!manual() && sch.hw5_auto ? `${sch.send}에 자동 발송돼요.` : '원장님이 확인하고 보내요.'} 보내고 나면 횟수는 처음부터 다시 세요.`));
   if (kind === 'missing') {
     const target = sch.missing_target || 'missing';
     info.append(h('div', { class: 'row', style: { marginBottom: '10px' } },
@@ -67,7 +73,7 @@ export async function renderMessages(main) {
           await api('/api/messages/generate', { kind, ref }); renderMessages(main);
         } }, l)))
         : h('span', { class: 'chip' }, target === 'missing' ? '미제출만' : '미제출 + 미흡'),
-      h('span', { class: 'small muted' }, sch.missing_auto ? `· ${sch.send}에 자동 발송` : '· 직접 확인하고 보내기')));
+      h('span', { class: 'small muted' }, !manual() && sch.missing_auto ? `· ${sch.send}에 자동 발송` : '· 원장님이 확인하고 보내기')));
   }
 
   async function load() {
@@ -122,7 +128,9 @@ export async function renderMessages(main) {
       data && (data.generated || data.list.length) ? h('button', { class: 'btn small ghost', onclick: async (e) => {
         e.target.disabled = true; await outbox.flushAll(); await api('/api/messages/generate', { kind, ref }); toast('최신 수업 기록으로 다시 만들었어요'); load();
       } }, '미리보기 다시 만들기') : null,
-      h('button', { class: 'btn primary', style: { marginLeft: 'auto' }, disabled: !n || sending, onclick: sendChecked }, sending ? '보내는 중…' : kind === 'growth' ? `승인된 ${n}건 지금 보내기` : `체크된 ${n}건 지금 보내기`));
+      canSend()
+        ? h('button', { class: 'btn primary', style: { marginLeft: 'auto' }, disabled: !n || sending, onclick: sendChecked }, sending ? '보내는 중…' : kind === 'growth' ? `승인된 ${n}건 지금 보내기` : `체크된 ${n}건 지금 보내기`)
+        : h('span', { class: 'small muted', style: { marginLeft: 'auto' } }, `체크 ${n}건 · 원장님이 확인 후 보내요`));
   }
 
   function setChecked(m, val) {
@@ -221,6 +229,7 @@ export async function renderMessages(main) {
       h('div', { class: 'msg-foot' },
         h('button', { class: 'btn small', disabled: !m.report_id, onclick: () => openReport(m) }, '리포트 보기 · 수정'),
         ready && !m.noTemplate ? h('button', { class: 'btn small ghost', onclick: async () => {
+          if (!canSend()) return toast('알림톡은 원장님이 확인하고 보내요', true);
           if (!(await confirmBox('이 학생만 보낼까요?', `${m.student_name} 학부모님께 주간 성장 리포트를 보냅니다.`, '보내기'))) return;
           try { const r = await api('/api/messages/send', { ids: [m.id], resend: m.status === 'sent' }); toast(r.failed ? '보내지 못했어요' : '보냈어요', !!r.failed); } catch (e) { toast(e.message, true); }
           load();
@@ -308,4 +317,51 @@ export async function renderMessages(main) {
   });
   S.stopPoll = () => off();
   await load();
+}
+
+// ───────── 보낸 내역 ─────────
+async function renderSent(main, seg) {
+  let to = sessionStorage.getItem('cm_sent_to') || kstToday();
+  let from = sessionStorage.getItem('cm_sent_from') || addDays(to, -6);
+  let q = '';
+  let data = null;
+  const fromIn = h('input', { type: 'date', class: 'input', style: { width: 'auto' }, value: from, onchange: () => { from = fromIn.value; sessionStorage.setItem('cm_sent_from', from); load(); } });
+  const toIn = h('input', { type: 'date', class: 'input', style: { width: 'auto' }, value: to, onchange: () => { to = toIn.value; sessionStorage.setItem('cm_sent_to', to); load(); } });
+  const search = h('input', { class: 'input', placeholder: '학생·반 이름 찾기', style: { maxWidth: '200px' }, oninput: () => { q = search.value.trim(); draw(); } });
+  const summary = h('div', { class: 'msg-sum' });
+  const list = h('div', null, h('div', { class: 'empty' }, '불러오는 중…'));
+  main.replaceChildren(h('div', { class: 'toolbar' }, seg), h('div', { class: 'row', style: { margin: '6px 0 10px' } }, fromIn, h('span', null, '~'), toIn, search), summary, list);
+  async function load() {
+    list.replaceChildren(h('div', { class: 'empty' }, '불러오는 중…'));
+    try { data = await api(`/api/messages/sent?from=${from}&to=${to}`); } catch (e) { list.replaceChildren(h('div', { class: 'note bad' }, e.message)); return; }
+    draw();
+  }
+  function draw() {
+    const v = data.list.filter((m) => !q || `${m.student} ${m.class_name}`.includes(q));
+    const ok = v.filter((m) => m.status === 'sent').length;
+    const byKind = {};
+    for (const m of v) if (m.status === 'sent') byKind[m.kind_label] = (byKind[m.kind_label] || 0) + 1;
+    summary.replaceChildren(h('span', null, '보냄 ', h('b', { style: { color: 'var(--ok)' } }, ok), '건'),
+      h('span', null, '실패 ', h('b', { style: { color: v.length - ok ? 'var(--bad)' : 'inherit' } }, v.length - ok), '건'),
+      ...Object.entries(byKind).map(([k, n]) => h('span', { class: 'small muted' }, `${k} ${n}`)));
+    if (!v.length) { list.replaceChildren(h('div', { class: 'card empty' }, '이 기간에 보낸 알림톡이 없어요.')); return; }
+    let day = '';
+    const out = [];
+    for (const m of v) {
+      const d = String(m.sent_at).slice(0, 10);
+      if (d !== day) { day = d; out.push(h('div', { class: 'small', style: { fontWeight: 700, margin: '14px 0 6px' } }, dateLabel(d))); }
+      const body = h('pre', { class: 'sent-text hidden' }, m.text || '');
+      out.push(h('div', { class: 'card card-pad sent-row' },
+        h('div', { class: 'row', style: { cursor: 'pointer' }, onclick: () => body.classList.toggle('hidden') },
+          h('b', null, m.student || '-'), h('span', { class: 'small muted' }, m.class_name),
+          h('span', { class: 'chip' }, m.kind_label),
+          h('span', { class: 'grow' }),
+          m.status === 'sent' ? h('span', { class: 'chip ok' }, `보냄 ${hmOf(m.sent_at)}`) : h('span', { class: 'chip bad', title: m.error }, '실패'),
+          h('span', { class: 'tiny muted' }, '문구 보기 ▾')),
+        m.status !== 'sent' && m.error ? h('div', { class: 'tiny', style: { color: 'var(--bad)', marginTop: '4px' } }, m.error) : null,
+        body));
+    }
+    list.replaceChildren(...out);
+  }
+  load();
 }

@@ -87,6 +87,20 @@ async function fixAttLateOnce(env) {
   await env.DB.prepare("INSERT INTO settings (k, v) VALUES ('fix_att_late_v1', '1') ON CONFLICT(k) DO NOTHING").run();
 }
 
+// 한 번만: 자동 발송을 모두 끄기 (2026-11-24 원장님 요청: 원장이 승인해서 보낼 때만 알림톡)
+async function approvalOnlyOnce(env) {
+  const done = await env.DB.prepare("SELECT v FROM settings WHERE k = 'approval_only_v1'").first();
+  if (done) return;
+  for (const [key, flags] of [['schedule', ['auto_send', 'missing_auto', 'hw5_auto', 'weekly_auto', 'monthly_auto']], ['growth', ['auto']]]) {
+    const row = await env.DB.prepare('SELECT v FROM settings WHERE k = ?').bind(key).first();
+    if (!row) continue;
+    const v = JSON.parse(row.v || '{}');
+    for (const f of flags) v[f] = false;
+    await env.DB.prepare('UPDATE settings SET v = ? WHERE k = ?').bind(JSON.stringify(v), key).run();
+  }
+  await env.DB.prepare("INSERT INTO settings (k, v) VALUES ('approval_only_v1', '1') ON CONFLICT(k) DO NOTHING").run();
+}
+
 let ready = false;
 export async function ensureSchema(env) {
   if (ready) return;
@@ -95,6 +109,7 @@ export async function ensureSchema(env) {
   // 나중에 추가된 칸 (이미 있으면 그냥 넘어가요)
   for (const sql of MIGRATIONS) { try { await env.DB.prepare(sql).run(); } catch { /* 이미 있음 */ } }
   try { await fixAttLateOnce(env); } catch (e) { console.error('fixAttLate', e); }
+  try { await approvalOnlyOnce(env); } catch (e) { console.error('approvalOnly', e); }
   ready = true;
 }
 
@@ -106,7 +121,7 @@ export const DEFAULT_SETTINGS = {
   hw_buttons: ['워크북', '단어 암기', '단어 시험 준비', '리딩 녹음', '원서 읽기 + 녹음', '문법 문제', '오답 정리', '숙제 없음'],
   reasons: ['결석', '보강', '결강', '미작성'],
   schedule: {
-    preview: '20:00', send: '20:30', auto_send: true,
+    preview: '20:00', send: '20:30', auto_send: false,
     weekly_on: true, weekly_day: 5, weekly_auto: false, weekly_exclude_today: true,
     monthly_on: true, monthly_auto: false,
     missing_on: true, missing_auto: false, missing_target: 'missing',
@@ -120,6 +135,8 @@ export const DEFAULT_SETTINGS = {
   kakao: { pfId: '', style: 'basic', templates: [], only: true },
   eval: DEFAULT_EVAL,
   growth: DEFAULT_GROWTH,
+  // 발송 방식: 원장 승인 후에만 보내기 + 원장님께 사본
+  send_policy: { director_only: true, copy: 'sample' },
 };
 
 export async function getSettings(env) {

@@ -365,7 +365,7 @@ export const DEFAULT_GROWTH = {
   day: 6,            // 토요일
   gen: '07:00',      // 리포트 만들기 시작
   send: '12:00',     // 승인된 리포트 발송
-  auto: true,        // 발송 시간에 "승인된" 리포트만 자동 발송
+  auto: false,       // 발송 시간에 "승인된" 리포트만 자동 발송
   model: '@cf/google/gemma-4-26b-a4b-it',
   per_tick: 3,       // 10분마다 AI로 쓰는 학생 수 (무료 사용량 아끼기)
   brand: 'PAMUS ENGLISH',

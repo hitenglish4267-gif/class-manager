@@ -109,6 +109,7 @@ async function meta(env, me) {
     me, academy: settings.academy, courses, curricula, teachers,
     hw_buttons: settings.hw_buttons, reasons: settings.reasons, schedule: settings.schedule, tests: settings.tests,
     r2: r2Ready(env), today: kstNow().date, growth: growthSettings(settings), evalMarks: EVAL_MARKS,
+    send_policy: { director_only: true, copy: 'sample', ...(settings.send_policy || {}) },
   };
 }
 
@@ -457,10 +458,40 @@ async function restoreMessage(env, me, body) {
 }
 
 async function sendNow(env, me, body) {
+  const pol = (await getSettings(env)).send_policy || {};
+  if (pol.director_only !== false && me.role !== 'director') throw new HttpError(403, '알림톡은 원장님이 확인하고 보내요. 체크만 해 두시면 돼요.');
   const vis = await visibleStudentIds(env, me);
   const rows = await all(env, 'SELECT id, student_id FROM messages WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify((body.ids || []).map(Number)));
   const ids = rows.filter((r) => !vis || vis.has(r.student_id)).map((r) => r.id);
   return sendMessages(env, ids, { resend: !!body.resend });
+}
+
+// ───────── 보낸 내역 ─────────
+async function sentHistory(env, me, url) {
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('to') || '') ? url.searchParams.get('to') : kstNow().date;
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('from') || '') ? url.searchParams.get('from') : addDays(to, -6);
+  const vis = await visibleStudentIds(env, me);
+  const settings = await getSettings(env);
+  const rows = await all(env, `SELECT m.*, s.name AS student_name, s.phone, s.msg_style, c.name AS class_name FROM messages m
+    LEFT JOIN students s ON s.id = m.student_id LEFT JOIN classes c ON c.id = s.class_id
+    WHERE m.sent_at IS NOT NULL AND m.sent_at >= ? AND m.sent_at <= ? ORDER BY m.sent_at DESC LIMIT 1000`, `${from} 00:00:00`, `${to} 23:59:59`);
+  const failedRows = await all(env, `SELECT m.*, s.name AS student_name, s.phone, s.msg_style, c.name AS class_name FROM messages m
+    LEFT JOIN students s ON s.id = m.student_id LEFT JOIN classes c ON c.id = s.class_id
+    WHERE m.status = 'failed' AND m.attempts > 0 AND m.ref >= ? AND m.ref <= ? ORDER BY m.ref DESC LIMIT 300`, from, to).catch(() => []);
+  const seen = new Set();
+  const list = [];
+  for (const r of [...rows, ...failedRows]) {
+    if (seen.has(r.id) || (vis && !vis.has(r.student_id))) continue;
+    seen.add(r.id);
+    let vars = {}; try { vars = JSON.parse(r.vars || '{}'); } catch { /* */ }
+    const item = buildSendItem(settings, r.kind, r.id, r.phone, r.text, vars, r.msg_style);
+    const tpl = item.kakao ? (settings.kakao.templates || []).find((t) => t.templateId === item.kakao.templateId) : null;
+    list.push({ id: r.id, kind: r.kind, kind_label: KIND_LABELS[r.kind] || r.kind, ref: r.ref, student: r.student_name, class_name: r.class_name || '',
+      phone: String(r.phone || '').replace(/(\d{3})(\d{3,4})(\d{4})/, '$1-****-$3'), status: r.status, sent_at: r.sent_at || r.updated_at, error: r.error || '', channel: r.channel || '',
+      text: tpl ? renderTemplate(tpl.text, vars, 'kakao') : r.text });
+  }
+  list.sort((a, b) => String(b.sent_at).localeCompare(String(a.sent_at)));
+  return { from, to, list };
 }
 
 // ───────── 관리 (원장) ─────────
@@ -477,7 +508,7 @@ async function adminData(env) {
   };
 }
 
-const SETTING_KEYS = new Set(['academy', 'base_url', 'director_phone', 'academy_phone', 'hw_buttons', 'reasons', 'schedule', 'att_alerts', 'sms_templates', 'cushions', 'kakao', 'tests', 'eval', 'growth']);
+const SETTING_KEYS = new Set(['academy', 'base_url', 'director_phone', 'academy_phone', 'hw_buttons', 'reasons', 'schedule', 'att_alerts', 'sms_templates', 'cushions', 'kakao', 'tests', 'eval', 'growth', 'send_policy']);
 async function saveSetting(env, body) {
   if (!SETTING_KEYS.has(body.key)) throw bad('바꿀 수 없는 설정이에요');
   let value = body.value;
@@ -490,6 +521,9 @@ async function saveSetting(env, body) {
     const byClass = {};
     for (const [k, v] of Object.entries(value.byClass || {})) if (Array.isArray(v) && v.length) byClass[String(Number(k))] = v.map(String).filter((id) => items.some((i) => i.id === id));
     value = { items, byClass };
+  }
+  if (body.key === 'send_policy') {
+    value = { director_only: value.director_only !== false, copy: ['off', 'sample', 'all'].includes(value.copy) ? value.copy : 'sample' };
   }
   if (body.key === 'growth') {
     const hm = (v, d) => (/^\d{2}:\d{2}$/.test(String(v)) ? String(v) : d);
@@ -842,6 +876,7 @@ export async function handleApi(request, env, ctx, url, version) {
     'POST /api/messages/restore': () => restoreMessage(env, me, body),
     'POST /api/messages/override': () => overrideMessage(env, me, body),
     'POST /api/messages/send': () => sendNow(env, me, body),
+    'GET /api/messages/sent': () => sentHistory(env, me, url),
     'GET /api/lessons': () => lessonsOf(env, url),
     'GET /api/media': async () => { await assertStudent(env, me, url.searchParams.get('student_id')); return { list: await mediaList(env, Number(url.searchParams.get('student_id')), url.searchParams.get('date')) }; },
     'POST /api/media/start': async () => { await assertStudent(env, me, body.student_id); return mediaStart(env, body); },
