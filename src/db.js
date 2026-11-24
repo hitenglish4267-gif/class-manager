@@ -48,6 +48,45 @@ const MIGRATIONS = [
   "ALTER TABLE students ADD COLUMN cur_days TEXT DEFAULT ''",
 ];
 
+// 한 번만: "출결 즉시 알림" 칸에 들어간 지각 템플릿을 "지각 즉시 알림" 칸으로 옮기기 (2026-11-24, 원장님 요청)
+const LATE_ID = 'KA01TP261112023701044FnlZwKp9zYN';
+const LATE_TEXT = `[파머스 어학원]
+지각 등원 안내
+
+#{학생명} 학생 보호자님, 안녕하세요.
+
+오늘 예정된 수업 시작 시각 이후 등원이 확인되어 출결 기록을 안내드립니다.
+
+■ 수업일: #{수업일}
+■ 수업 시작: #{수업시작시각}
+■ 등원 확인: #{등원시각}
+■ 지각 시간: #{지각분}분
+■ 출결 상태: 지각
+
+다음 수업에는 시작 시각에 맞춰 등원할 수 있도록 확인 부탁드립니다. 출결 기록이 실제와 다른 경우 학원으로 연락해 주세요.
+
+본 메시지는 재원생의 출결 현황을 등록된 보호자께 안내하는 알림입니다.
+
+문의: #{학원연락처}`;
+async function fixAttLateOnce(env) {
+  const done = await env.DB.prepare("SELECT v FROM settings WHERE k = 'fix_att_late_v1'").first();
+  if (done) return;
+  const row = await env.DB.prepare("SELECT v FROM settings WHERE k = 'kakao'").first();
+  if (row) {
+    const k = JSON.parse(row.v || '{}');
+    const list = Array.isArray(k.templates) ? k.templates : [];
+    const next = list.filter((t) => !(t.kind === 'att' && t.templateId === LATE_ID));
+    if (!next.some((t) => t.kind === 'late' && t.templateId)) {
+      const i = next.findIndex((t) => t.kind === 'late');
+      const tpl = { kind: 'late', style: 'basic', templateId: LATE_ID, text: LATE_TEXT };
+      if (i >= 0) next[i] = { ...next[i], ...tpl }; else next.push(tpl);
+    }
+    k.templates = next;
+    await env.DB.prepare("INSERT INTO settings (k, v) VALUES ('kakao', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(JSON.stringify(k)).run();
+  }
+  await env.DB.prepare("INSERT INTO settings (k, v) VALUES ('fix_att_late_v1', '1') ON CONFLICT(k) DO NOTHING").run();
+}
+
 let ready = false;
 export async function ensureSchema(env) {
   if (ready) return;
@@ -55,6 +94,7 @@ export async function ensureSchema(env) {
   await env.DB.batch(stmts.map((s) => env.DB.prepare(s)));
   // 나중에 추가된 칸 (이미 있으면 그냥 넘어가요)
   for (const sql of MIGRATIONS) { try { await env.DB.prepare(sql).run(); } catch { /* 이미 있음 */ } }
+  try { await fixAttLateOnce(env); } catch (e) { console.error('fixAttLate', e); }
   ready = true;
 }
 
