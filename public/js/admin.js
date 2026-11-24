@@ -543,7 +543,16 @@ function secSchedule() {
   const save = () => { setSetting('schedule', { ...s }); S.meta.schedule = { ...s }; };
   const time = (key) => h('input', { class: 'input', type: 'time', value: s[key], step: 600, onchange: (e) => { s[key] = e.target.value; save(); } });
   const sw = (key, label) => h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: !!s[key], onchange: (e) => { s[key] = e.target.checked; save(); } }), label);
-  return section('schedule', '발송 일정',
+  const pol = A.settings.send_policy = { director_only: true, copy: 'sample', ...(A.settings.send_policy || {}) };
+  const savePol = () => { setSetting('send_policy', { ...pol }); S.meta.send_policy = { ...pol }; };
+  const polBox = h('div', { class: 'card card-pad', style: { boxShadow: 'none', marginBottom: '12px' } },
+    h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: pol.director_only !== false, onchange: (e) => { pol.director_only = e.target.checked; savePol(); } }), h('b', null, '원장님이 승인해야 알림톡 발송 (자동 발송 안 함)')),
+    h('div', { class: 'tiny muted mt-s' }, '켜 두면 아래 "자동 발송" 설정과 상관없이, 원장님이 메시지 화면에서 "지금 보내기"를 눌러야만 학부모님께 가요. 선생님은 체크만 할 수 있어요.'),
+    h('div', { class: 'row mt' }, h('span', { class: 'small' }, '원장님께 사본'),
+      h('select', { class: 'input', style: { width: 'auto' }, onchange: (e) => { pol.copy = e.target.value; savePol(); } },
+        [['sample', '종류별 1건씩 (추천)'], ['all', '보낸 것 전부'], ['off', '받지 않기']].map(([v, l]) => h('option', { value: v, selected: pol.copy === v }, l)))),
+    h('div', { class: 'tiny muted mt-s' }, '학부모님이 받은 문구 그대로 원장님 휴대폰(학원 정보의 "원장님 휴대폰")으로도 보내요. 사본도 알림톡 1건 요금(약 14원)이 들고 하루 한도에 포함돼요. 보낸 문구는 메시지 → "보낸 내역"에서도 모두 볼 수 있어요.'));
+  return section('schedule', '발송 일정', polBox,
     h('div', { class: 'grid2' }, field('미리보기 만드는 시간', time('preview'), '이 시간에 그날 기록으로 메시지를 만들어요'), field('자동 발송 시간', time('send'), '그 전까지 문구를 고치거나 체크를 풀 수 있어요')),
     h('div', { class: 'stack mt' }, sw('auto_send', '일간 리포트 자동 발송 (체크된 메시지만)')),
     h('div', { class: 'sec-title' }, '미제출 알림'),

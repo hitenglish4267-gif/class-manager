@@ -414,6 +414,23 @@ export async function sendMessages(env, ids, opts = {}) {
     }
   }
   if (stmts.length) await env.DB.batch(stmts);
+  // 원장님께 사본: 학부모님이 받은 문구를 원장님 휴대폰으로도 (sample = 종류별 1건, all = 전부)
+  try {
+    const pol = settings.send_policy || {};
+    const copy = pol.copy || 'sample';
+    const dir = String(settings.director_phone || '').replace(/\D/g, '');
+    if (copy !== 'off' && dir.length >= 10) {
+      const okItems = items.filter((it) => (results.get(it.key) || {}).ok);
+      const pick = [];
+      const kinds = new Set();
+      for (const it of okItems) {
+        const m = claimed.find((x) => x.id === it.key);
+        if (copy === 'sample') { if (kinds.has(m.kind)) continue; kinds.add(m.kind); }
+        pick.push({ ...it, key: `copy-${it.key}`, to: dir });
+      }
+      if (pick.length) await sendBatch(env, pick);
+    }
+  } catch (e) { console.error('copy', e); }
   return { sent, failed };
 }
 
