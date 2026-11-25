@@ -245,6 +245,20 @@ async function saveRecord(env, me, body, ctx) {
 async function setStudentCurriculum(env, me, body) {
   await assertStudent(env, me, body.student_id);
   const sid = Number(body.student_id);
+  // 오늘만 개별 수업 (그날만 학생 진도로 적고, 다음 수업부터는 다시 반 진도)
+  if (body.solo_today != null) {
+    const date = String(body.date || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw bad('날짜가 올바르지 않아요');
+    if (body.solo_today) {
+      await run(env, 'INSERT INTO solo_days (date, student_id, updated_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING', date, sid, kstNow().stamp);
+      if (body.curriculum_id !== undefined) await run(env, 'UPDATE students SET curriculum_id = COALESCE(curriculum_id, ?), start_seq = CASE WHEN curriculum_id IS NULL THEN ? ELSE start_seq END WHERE id = ?', body.curriculum_id || null, body.start_seq ?? null, sid);
+    } else {
+      await run(env, 'DELETE FROM solo_days WHERE date = ? AND student_id = ?', date, sid);
+      await run(env, "DELETE FROM logs WHERE date = ? AND (target = ? OR target LIKE ?)", date, `s${sid}`, `s${sid}t%`);
+      await run(env, 'DELETE FROM track_days WHERE date = ? AND class_id = ?', date, -sid);
+    }
+    return { ok: true };
+  }
   // 개별 진도 켜기/끄기
   if (body.solo != null) { await run(env, 'UPDATE students SET solo = ? WHERE id = ?', body.solo ? 1 : 0, sid); if (body.curriculum_id === undefined) return { ok: true }; }
   // 교재 하나 더 / 빼기

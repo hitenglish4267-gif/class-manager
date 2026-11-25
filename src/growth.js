@@ -175,7 +175,7 @@ export function buildFacts(settings, s, cur, prev, period) {
   const latest = new Map();
   for (const d of days) for (const l of logsOf(cur, d.date, s, d.class_id)) if (!l.target.endsWith('tx')) latest.set(l.target, l);
   // 개별 진도로 바꾼 학생은 반 진도의 다음 차시는 빼기
-  if ([...latest.keys()].some((t) => t.startsWith('s'))) for (const t of [...latest.keys()]) if (t.startsWith('c')) latest.delete(t);
+  if (s.solo && [...latest.keys()].some((t) => t.startsWith('s'))) for (const t of [...latest.keys()]) if (t.startsWith('c')) latest.delete(t);
   const nexts = [...latest.values()].map((l) => ({ book: l.book, text: l.repeat ? oneLine(l.today) : oneLine(l.next) })).filter((x) => x.text);
   const nextPlan = lastNote ? lastNote.next_plan : nexts.length > 1 ? nexts.map((x) => `${x.book ? `[${x.book}] ` : ''}${x.text}`).join(' / ') : nexts[0] ? nexts[0].text : '';
 

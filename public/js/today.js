@@ -333,6 +333,29 @@ async function changeStudentCurriculum(c, s, curId) {
 // ───────── 학생 개별 진도 ─────────
 async function toggleSolo(c, s) {
   await outbox.flush(recKey(c.id));
+  if (s.solo_today) {
+    if (!(await confirmBox(`${s.name} 오늘 개별 수업을 취소할까요?`, '오늘 이 학생에게 적은 개별 진도는 지워지고, 반 진도로 기록돼요.', '취소하기', true))) return;
+    await api('/api/student-curriculum', { student_id: s.id, solo_today: false, date: S.date });
+    toast(`${s.name}: 오늘은 반 수업으로 기록해요`); load(); return;
+  }
+  if (!s.solo) {
+    const p = c.progress || {};
+    const pick = await new Promise((resolve) => {
+      let done = false;
+      sheet(`${s.name} · 개별 수업`, (close) => h('div', { class: 'stack' },
+        h('button', { class: 'btn primary', style: { justifyContent: 'flex-start', padding: '14px 16px', textAlign: 'left' }, onclick: () => { done = true; close(); resolve('today'); } },
+          h('div', null, h('b', null, '오늘만 개별 수업'), h('div', { class: 'small', style: { opacity: .85, fontWeight: 400 } }, '오늘만 이 학생 진도를 따로 적어요. 다음 수업부터는 다시 반 진도로 돌아가요.'))),
+        h('button', { class: 'btn', style: { justifyContent: 'flex-start', padding: '14px 16px', textAlign: 'left' }, onclick: () => { done = true; close(); resolve('always'); } },
+          h('div', null, h('b', null, '앞으로 계속 개별 진도'), h('div', { class: 'small muted', style: { fontWeight: 400 } }, '이 학생은 반 안에서 계속 자기 책·진도로 수업해요 (중등부처럼).'))),
+        h('p', { class: 'tiny muted', style: { margin: 0 } }, '개별로 한 교재는 학생마다 진도가 따로 이어져서, 다음에 개별 수업을 하면 그다음 차시부터 나와요.')),
+      { onClose: () => { if (!done) resolve(null); } });
+    });
+    if (!pick) return;
+    if (pick === 'today') {
+      await api('/api/student-curriculum', { student_id: s.id, solo_today: true, date: S.date, curriculum_id: p.curriculum_id || c.curriculum_id || null, start_seq: p.seq ?? null });
+      toast(`${s.name}: 오늘만 개별 수업으로 적어요`); load(); return;
+    }
+  }
   if (!s.solo) {
     // 처음 켜면: 반에서 하던 교재·차시에서 이어서 시작
     const p = c.progress || {};
@@ -417,7 +440,8 @@ function studentRow(c, s) {
     mediaBtn, linkBtn));
   row.append(comment);
   if (c.type !== 'individual') {
-    row.querySelector('.stu-tools').append(h('button', { class: 'btn small ghost', onclick: () => toggleSolo(c, s) }, s.solo ? '반 진도로 돌아가기' : '개별 진도·교재'));
+    row.querySelector('.stu-tools').append(h('button', { class: 'btn small ghost', onclick: () => toggleSolo(c, s) },
+      s.solo_today ? '오늘 개별 수업 취소' : s.solo ? '반 진도로 돌아가기' : '개별 수업·교재'));
   }
   if (s.solo && s.tracks) row.append(tracksBlock(c, s));
   paintAtt(); paintHw();
