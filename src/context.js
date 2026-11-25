@@ -29,6 +29,9 @@ export async function buildDay(env, date, opts = {}) {
   const byClass = new Map(classes.map((c) => [c.id, { ...c, students: [] }]));
   for (const s of students) byClass.get(s.class_id)?.students.push(s);
 
+  // 오늘만 개별 수업으로 바꾼 학생
+  const soloToday = new Set((await all(env, 'SELECT student_id FROM solo_days WHERE date = ?', date).catch(() => [])).map((r) => r.student_id));
+  for (const s of students) { s.solo_today = soloToday.has(s.id) && !s.solo; }
   const targets = [];
   const curIds = [];
   for (const c of byClass.values()) {
@@ -37,7 +40,7 @@ export async function buildDay(env, date, opts = {}) {
       for (const t of c.trackDefs) { targets.push(t.target); curIds.push(t.curriculum_id); }
     }
     // 개별 진도 학생 (개별수업 반 전원 + 그룹 반에서 "개별 진도"로 바꾼 학생)
-    for (const s of c.students) if (isSolo(c, s)) {
+    for (const s of c.students) if (isSolo(c, s) || s.solo_today) {
       s.trackDefs = studentTracks(s);
       for (const t of s.trackDefs) { targets.push(t.target); curIds.push(t.curriculum_id); }
     }
@@ -72,7 +75,7 @@ export async function buildDay(env, date, opts = {}) {
     cls.students = c.students.map((s) => {
       const st = {
         id: s.id, name: s.name, phone: s.phone, code: s.code, msg_style: s.msg_style,
-        curriculum_id: s.curriculum_id, start_seq: s.start_seq, course_id: s.course_id, solo: isSolo(c, s),
+        curriculum_id: s.curriculum_id, start_seq: s.start_seq, course_id: s.course_id, solo: isSolo(c, s) || !!s.solo_today, solo_today: !!s.solo_today,
         day: dayMap.get(s.id) || { att: '', reason: '', hw: '', comment: '' },
         tests: testMap.get(s.id) || [],
         media: mediaMap.get(s.id) || 0,
@@ -84,6 +87,10 @@ export async function buildDay(env, date, opts = {}) {
         // 학생별 요일 바꿈은 track_days에 class_id = -학생번호로 저장
         const b = buildTracks(s.trackDefs, trackDays.get(-s.id), logs, curMap, dow);
         st.tracks = b.tracks; st.progress = b.progress;
+        // 오늘만 개별이면, 지난 수업·숙제는 반 수업과 개별 수업 중 더 최근 것으로
+        if (s.solo_today && cls.progress && (cls.progress.prevDate || '') > (st.progress.prevDate || '')) {
+          for (const k of ['prevDate', 'prevHomework', 'prevToday']) { st.progress[k] = cls.progress[k]; for (const t of st.tracks) t.progress[k] = cls.progress[k]; }
+        }
       }
       return st;
     });
