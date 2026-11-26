@@ -1,8 +1,8 @@
 // 하루치 수업 정보 모으기 (오늘 수업 화면 + 메시지 만들기에서 함께 사용)
 
 import { all } from './db.js';
-import { dowOf } from './util.js';
-import { loadCurricula, loadLogs, targetOf, classTracks, studentTracks, isSolo, buildTracks } from './progress.js';
+import { dowOf, kstNow, addDays } from './util.js';
+import { loadCurricula, loadLogs, targetOf, classTracks, studentTracks, isSolo, buildTracks, trackOnDefault } from './progress.js';
 
 export function hasClassOn(cls, date) {
   const d = String(dowOf(date));
@@ -49,6 +49,17 @@ export async function buildDay(env, date, opts = {}) {
     let k = null; try { k = JSON.parse(r.keys); } catch { k = null; } return [r.class_id, Array.isArray(k) ? k.map(String) : null];
   }));
   const dow = dowOf(date);
+  // 미리 적기 (오늘 이후 날짜): 오늘부터 그 전날까지 아직 기록이 없는 수업 날 수만큼 진도를 앞으로
+  const todayKst = kstNow().date;
+  const aheadFor = (classDays) => (date > todayKst ? (t, prevLog) => {
+    let n = 0;
+    let d = prevLog && prevLog.date >= todayKst ? addDays(prevLog.date, 1) : todayKst;
+    for (; d < date; d = addDays(d, 1)) {
+      const w = String(dowOf(d));
+      if (String(classDays || '').split(',').map((x) => x.trim()).includes(w) && trackOnDefault(t, w)) n++;
+    }
+    return n;
+  } : null);
   const curMap = await loadCurricula(env, curIds);
   const logs = targets.length ? await loadLogs(env, targets, date) : { today: new Map(), prev: new Map() };
 
@@ -68,7 +79,7 @@ export async function buildDay(env, date, opts = {}) {
     const cls = { ...c, progress: null };
     if (c.type !== 'individual') {
       cls.target = targetOf(c);
-      const b = buildTracks(c.trackDefs, trackDays.get(c.id), logs, curMap, dow);
+      const b = buildTracks(c.trackDefs, trackDays.get(c.id), logs, curMap, dow, aheadFor(c.days));
       cls.tracks = b.tracks; cls.progress = b.progress;
       delete cls.trackDefs;
     }
@@ -85,7 +96,7 @@ export async function buildDay(env, date, opts = {}) {
       if (st.solo) {
         st.target = targetOf({ type: 'individual' }, s);
         // 학생별 요일 바꿈은 track_days에 class_id = -학생번호로 저장
-        const b = buildTracks(s.trackDefs, trackDays.get(-s.id), logs, curMap, dow);
+        const b = buildTracks(s.trackDefs, trackDays.get(-s.id), logs, curMap, dow, s.solo_today ? null : aheadFor(c.days));
         st.tracks = b.tracks; st.progress = b.progress;
         // 오늘만 개별이면, 지난 수업·숙제는 반 수업과 개별 수업 중 더 최근 것으로
         if (s.solo_today && cls.progress && (cls.progress.prevDate || '') > (st.progress.prevDate || '')) {
