@@ -30,7 +30,10 @@ export async function renderToday(main) {
   boardBox = h('div');
   tabsBox = h('div');
   listBox = h('div', null, h('div', { class: 'empty' }, '불러오는 중…'));
-  main.replaceChildren(toolbar, boardBox, tabsBox, listBox);
+  const ahead = S.date > kstToday() ? h('div', { class: 'note', style: { marginBottom: '12px' } },
+    h('b', null, '📝 미리 적기 — '), `${Number(S.date.slice(5, 7))}월 ${Number(S.date.slice(8, 10))}일 수업 계획을 미리 적고 있어요. `,
+    '진도는 오늘 수업의 다음 차시부터 이어서 채워져요. 여기서 고쳐 적으면 그대로 저장되고, 그날 오늘 수업 화면에 그대로 나와요. 출석·숙제 결과·시험은 그날 체크해 주세요.') : null;
+  main.replaceChildren(toolbar, ahead, boardBox, tabsBox, listBox);
   await load();
   const timer = setInterval(() => { if (document.visibilityState === 'visible') softRefresh(); }, 20000);
   const off = outbox.on((key) => updateSaveBar(key));

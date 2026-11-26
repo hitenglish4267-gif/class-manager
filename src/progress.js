@@ -39,7 +39,7 @@ export function nextText(lesson) { return lesson ? lesson.title || '' : ''; }
  * todayLog = 오늘 저장된 기록 (있으면 그대로)
  * prevLog = 오늘 전 가장 최근 기록
  */
-export function computeProgress(assign, cur, todayLog, prevLog) {
+export function computeProgress(assign, cur, todayLog, prevLog, advance = 0) {
   const prevHomework = prevLog ? prevLog.homework || '' : '';
   const prevDate = prevLog ? prevLog.date : null;
   const prevToday = prevLog ? oneLine(prevLog.today || '') + (prevLog.repeat ? ' (다시 하기로 함)' : '') : '';
@@ -65,9 +65,11 @@ export function computeProgress(assign, cur, todayLog, prevLog) {
       lesson = lessonFrom(cur, assign.start_seq);
     }
   }
+  // 미리 적기: 오늘~그 전날 사이에 아직 기록이 없는 수업 날이 있으면 그만큼 진도를 앞으로
+  for (let i = 0; i < advance && lesson; i++) lesson = lessonAfter(cur, lesson.seq);
   const nxt = lesson ? lessonAfter(cur, lesson.seq) : null;
   return {
-    saved: false, curriculum_id: cur ? cur.id : null, lesson_id: lesson ? lesson.id : null, seq: lesson ? lesson.seq : null,
+    saved: false, ahead: advance, curriculum_id: cur ? cur.id : null, lesson_id: lesson ? lesson.id : null, seq: lesson ? lesson.seq : null,
     today: todayText(lesson), next: nextText(nxt), homework: lesson ? lesson.homework || '' : '', repeat: 0,
     content: lesson ? lesson.content || '' : '', prevHomework, prevDate, prevToday,
     ended: !!(cur && cur.lessons.length && !lesson),
@@ -143,12 +145,13 @@ export function studentTracks(s) {
 export function isSolo(cls, s) { return (cls && cls.type === 'individual') || !!(s && s.solo); }
 
 /** 진도표 묶음 → 그날 켜진 것·진도·지난 수업/숙제까지 (반이든 학생이든 같은 방식) */
-export function buildTracks(defs, override, logs, curMap, dow) {
+export function buildTracks(defs, override, logs, curMap, dow, ahead) {
   const tracks = defs.map((t) => {
     const cur = curMap.get(t.curriculum_id);
     const on = override ? override.includes(t.key) : (logs.today.has(t.target) || trackOnDefault(t, dow));
+    const adv = ahead && !t.free && !logs.today.has(t.target) ? ahead(t, logs.prev.get(t.target)) : 0;
     return { key: t.key, target: t.target, curriculum_id: t.curriculum_id, name: t.free ? '추가 학습' : cur ? cur.name : '', days: t.days, free: !!t.free, on,
-      progress: computeProgress({ curriculum_id: t.curriculum_id, start_seq: t.start_seq }, cur, logs.today.get(t.target), logs.prev.get(t.target)) };
+      progress: computeProgress({ curriculum_id: t.curriculum_id, start_seq: t.start_seq }, cur, logs.today.get(t.target), logs.prev.get(t.target), adv) };
   });
   const progress = combineProgress(tracks, (id) => (curMap.get(id) || {}).name);
   const prevs = tracks.map((t) => logs.prev.get(t.target)).filter(Boolean);
