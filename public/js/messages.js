@@ -270,19 +270,20 @@ export async function renderMessages(main) {
           LIST.has(k) ? h('span', { class: 'tiny muted', style: { fontWeight: 500 } }, ' — 한 줄에 하나씩') : null), ta, polish);
       });
       const polishAllBtn = h('button', { class: 'btn', type: 'button', onclick: async (e) => {
-        e.target.disabled = true; e.target.textContent = 'AI가 전체를 다듬는 중… (30초쯤)';
+        e.target.disabled = true; e.target.textContent = 'AI가 고친 칸을 다듬는 중…';
         try {
-          const r = await api('/api/report/polish-all', { id: R.id, content: c });
+          const r = await api('/api/report/polish-all', { id: R.id, content: c, base: R.content });
+          if (!r.changed.length) { toast('고친 칸이 없어요. 칸에 메모를 적은 뒤 눌러 주세요', true); e.target.disabled = false; e.target.textContent = '고친 칸 모두 AI로 다듬기'; return; }
           for (const ta of tas.map((l) => l.querySelector('textarea'))) {
             const k = ta._key; c[k] = r.content[k];
             ta.value = LIST.has(k) ? (r.content[k] || []).join('\n') : (r.content[k] || ''); grow(ta);
           }
-          toast('적어 두신 뜻을 살려 전체를 다듬었어요. 확인하고 "고친 내용 저장"을 눌러 주세요');
+          toast(`고친 ${r.changed.length}칸을 다듬었어요. 확인하고 "고친 내용 저장"을 눌러 주세요`);
         } catch (err) { toast(err.message, true); }
-        e.target.disabled = false; e.target.textContent = '적은 내용 전체 AI로 다듬기';
-      } }, '적은 내용 전체 AI로 다듬기');
+        e.target.disabled = false; e.target.textContent = '고친 칸 모두 AI로 다듬기';
+      } }, '고친 칸 모두 AI로 다듬기');
       const edit = h('div', { class: 'rep-edit hidden' },
-        h('div', { class: 'note small' }, '칸마다 짧게 메모처럼 적어도 돼요. 칸 아래 "AI로 다듬기"는 그 칸만, 맨 아래 "적은 내용 전체 AI로 다듬기"는 모든 칸을 한 번에 자연스럽고 전문적인 문장으로 바꿔요. 적은 뜻은 그대로 살리고, 기록에 없는 내용은 지어내지 않아요.'),
+        h('div', { class: 'note small' }, '칸마다 짧게 메모처럼 적어도 돼요. 칸 아래 "AI로 다듬기"는 그 칸만, 맨 아래 "고친 칸 모두 AI로 다듬기"는 원장님이 고친 칸들을 한 번에(동시에) 자연스럽고 전문적인 문장으로 바꿔요. 적은 뜻은 그대로 살리고, 기록에 없는 내용은 지어내지 않아요.'),
         ...tas,
         h('div', { class: 'row mt' },
           polishAllBtn,
