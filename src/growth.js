@@ -275,8 +275,10 @@ export async function ensureReports(env, settings, ref, rkind = 'weekly') {
 }
 
 // ───────── AI로 문장 쓰기 ─────────
-const SECTION_KEYS = ['overview', 'concepts', 'strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'next_week', 'home_tips', 'teacher_comment'];
-const LIST_KEYS = new Set(['strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'home_tips']);
+const SECTION_KEYS = ['overview', 'skills', 'concepts', 'strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'goals', 'next_week', 'home_tips', 'teacher_comment'];
+const LIST_KEYS = new Set(['skills', 'strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'goals', 'home_tips']);
+export const SKILL_AREAS = ['어휘', '읽기', '쓰기', '문법', '말하기·듣기', '학습 습관'];
+export const SKILL_LEVELS = ['도입', '발전', '안정', '심화'];
 
 // 학원에서 쓰는 학습 항목을 학부모가 알아듣게 풀어 주는 말 (AI가 전문 용어를 설명할 때 참고)
 const TERM_HINTS = {
@@ -323,10 +325,21 @@ const SYSTEM = `당신은 15년 넘게 초등·중등 아이들을 가르쳐 온
 - 금지: "열심히 했어요", "잘했어요", "최선을 다하겠습니다", "앞으로도 지켜봐 주세요" 같은 내용 없는 상투어 단독 사용, 이모지, 느낌표, 같은 문장 시작 반복, 형식적인 인사말.
 - 학생 이름은 overview 첫 문장에서 한 번만 "이름+이는/는" 형태로 부르고, 그 뒤는 생략합니다.
 
+[영역별 학습 진단 — skills]
+- 기록에 근거가 있는 영역만 2~5개 씁니다. 영역은 어휘, 읽기, 쓰기, 문법, 말하기·듣기, 학습 습관 중에서 고릅니다.
+- 형식: "영역|단계|진단" 한 줄 문자열. 단계는 도입(처음 배우는 중) · 발전(도움을 받아 해내는 중) · 안정(스스로 정확히 해냄) · 심화(응용·확장까지 함) 중 하나입니다.
+- 단계는 평가 기록으로 정합니다: '매우 잘함·잘함'이 대부분이면 안정, 응용 기록까지 있으면 심화, '향상 중'이 많으면 발전, '반복 연습 필요·개념 확인 필요'가 많으면 도입~발전.
+- 진단은 2~3문장: 근거(평가 횟수·점수·날짜) → 이 단계의 의미(무엇을 할 수 있고 무엇이 다음 단계인지). 구체 사례는 strengths·practice에 쓰고 여기서는 영역 수준의 종합 진단만 합니다.
+- 예: "어휘|안정|이번 기간 Voca 시험 네 번이 모두 90% 이상이었고 단어 암기에서 '매우 잘함'이 세 번 있었어요. 배운 단어를 정확히 기억하는 단계라, 다음에는 문장 속에서 바르게 쓰는 단계로 넓혀 갈 거예요."
+
+[다음 기간 학습 목표 — goals]
+- 2~3개. 다음 기간이 끝났을 때 확인할 수 있는 구체적인 목표로 씁니다(숫자·횟수·항목 이름). 기록에 근거한 목표만 씁니다.
+- 예: "Voca 시험 평균 85% 이상 유지하기", "구문 분석에서 '잘함' 2회 이상 받기", "숙제 완료율 90% 이상"
+
 [분량]
-- overview: 4~5문장. 이 기간 전체를 한눈에 정리(수업 이해도, 계획한 진도를 따라가는 정도, 수업 태도와 과제 수행, 가장 눈에 띈 변화).
+- overview: 5~6문장. 이 기간 전체를 한눈에 정리(수업 이해도, 계획한 진도를 따라가는 정도, 수업 태도와 과제 수행, 가장 눈에 띈 변화, 다음 기간의 초점).
 - concepts: 이 기간에 배운 핵심 개념·활동 2~3문장.
-- strengths, growth, practice, weak_concepts, academy_done, academy_plan: 근거가 있는 것만, 항목마다 2~3문장. 최대 4개.
+- strengths, growth, practice, weak_concepts, academy_done, academy_plan: 근거가 있는 것만, 항목마다 2~3문장(관찰→의미→다음 지도). 최대 4개.
 - next_week: 다음 기간 학습 예정 2문장 (교재·Unit 이름 포함).
 - home_tips: 가정에서 하루 5~10분 안에 할 수 있는 구체적인 행동 1~3개 (무엇을, 어떻게, 얼마나).
 - teacher_comment: 3~4문장.
@@ -336,7 +349,7 @@ const SYSTEM = `당신은 15년 넘게 초등·중등 아이들을 가르쳐 온
 "practice":["구문 분석(문장을 주어·동사 같은 덩어리로 나눠 구조를 파악하는 연습)에서 11/19에 '반복 연습 필요'가 있었어요. 문장이 길어지면 동사를 먼저 찾는 단계가 아직 익숙하지 않은 상태예요. 매 수업 시작 5분 동안 짧은 문장 3개로 동사 찾기를 함께 하고, 다음 리포트에서 변화를 다시 알려 드릴게요."]}
 
 출력은 설명 없이 아래 형식의 JSON 하나만 씁니다:
-{"overview":"","concepts":"","strengths":[],"growth":[],"practice":[],"weak_concepts":[],"academy_done":[],"academy_plan":[],"next_week":"","home_tips":[],"teacher_comment":""}`;
+{"overview":"","skills":[],"concepts":"","strengths":[],"growth":[],"practice":[],"weak_concepts":[],"academy_done":[],"academy_plan":[],"goals":[],"next_week":"","home_tips":[],"teacher_comment":""}`;
 
 const POLISH = `당신은 영어학원 원장입니다. 아래 "초안"은 학부모님께 보낼 성장 리포트 문장이고, "기록 요약"은 근거 자료입니다.
 초안을 다듬어 같은 JSON 형식으로만 답하세요.
@@ -346,7 +359,8 @@ const POLISH = `당신은 영어학원 원장입니다. 아래 "초안"은 학�
 - 부족한 부분에는 학원의 구체적인 지도 방법·빈도가 함께 있는지 확인하고, 없으면 기록에 맞게 보탭니다.
 - 문장은 따뜻하고 차분한 존댓말로, 경험 많은 선생님이 직접 쓴 것처럼 자연스럽게 다듬습니다.
 - 빈 칸("" 또는 [])은 근거가 없으면 그대로 둡니다.
-- 여러 칸에 같은 사실·비슷한 문장이 있으면 가장 알맞은 한 칸에만 남기고 나머지는 지웁니다. 다음 진도·시험 준비 이야기는 next_week에만 둡니다.`;
+- 여러 칸에 같은 사실·비슷한 문장이 있으면 가장 알맞은 한 칸에만 남기고 나머지는 지웁니다. 다음 진도·시험 준비 이야기는 next_week에만 둡니다.
+- skills는 "영역|단계|진단" 형식을 지키고, 단계는 도입·발전·안정·심화 중 하나만 씁니다. goals는 확인 가능한 목표(숫자·횟수·항목)로 다듬습니다.`;
 
 /** AI에게 줄 기록 요약 (JSON 대신 한국어 문장 — 더 자연스럽고 정확하게 써요) */
 export function briefFor(f) {
@@ -401,11 +415,27 @@ function parseJson(text) {
   return JSON.parse(t.slice(a, b + 1));
 }
 
+/** "영역|단계|진단" 한 줄로 맞추기 (AI가 객체로 주거나 구분자를 다르게 써도) */
+function normSkill(x) {
+  let area = '', level = '', text = '';
+  if (x && typeof x === 'object') { area = x.area || x.영역 || x.name || ''; level = x.level || x.단계 || ''; text = x.text || x.진단 || x.desc || x.evidence || ''; }
+  else {
+    const p = String(x || '').split('|');
+    if (p.length >= 3) [area, level, text] = [p[0], p[1], p.slice(2).join(' ')];
+    else { text = String(x || ''); const m = text.match(/^\s*([^:：]{1,8})\s*[:：]\s*(.+)$/); if (m && SKILL_AREAS.some((a) => m[1].includes(a.split('·')[0]))) { area = m[1]; text = m[2]; } }
+  }
+  area = String(area).trim().slice(0, 12); level = String(level).trim();
+  if (!SKILL_LEVELS.includes(level)) level = SKILL_LEVELS.find((l) => level.includes(l)) || '';
+  text = String(text).replace(/!+/g, '.').replace(/\s+/g, ' ').trim().slice(0, 500);
+  if (!text) return '';
+  return `${area || '종합'}|${level || '발전'}|${text}`;
+}
 export function cleanContent(o) {
   const out = {};
   const str = (v, max) => String(v == null ? '' : v).replace(/\s+\n/g, '\n').replace(/!+/g, '.').trim().slice(0, max);
   for (const k of SECTION_KEYS) {
-    if (LIST_KEYS.has(k)) out[k] = (Array.isArray(o[k]) ? o[k] : o[k] ? [o[k]] : []).map((x) => str(typeof x === 'object' ? Object.values(x).join(' ') : x, 500)).filter(Boolean).slice(0, 5);
+    if (k === 'skills') out[k] = (Array.isArray(o[k]) ? o[k] : o[k] ? [o[k]] : []).map(normSkill).filter(Boolean).slice(0, 6);
+    else if (LIST_KEYS.has(k)) out[k] = (Array.isArray(o[k]) ? o[k] : o[k] ? [o[k]] : []).map((x) => str(typeof x === 'object' ? Object.values(x).join(' ') : x, 500)).filter(Boolean).slice(0, 5);
     else out[k] = str(o[k], 1000);
   }
   return out;
@@ -528,7 +558,7 @@ export async function processQueue(env, opts = {}) {
 }
 
 // ───────── 반복 문구 걸러내기 · 근거 없는 칸 비우기 ─────────
-const ORDER = ['overview', 'next_week', 'concepts', 'strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'home_tips', 'teacher_comment'];
+const ORDER = ['overview', 'next_week', 'concepts', 'strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'skills', 'goals', 'home_tips', 'teacher_comment'];
 const norm = (t) => String(t).replace(/[\s.,·:;'"()\[\]~\-]/g, '').toLowerCase();
 const grams = (t) => { const s = norm(t); const g = new Set(); for (let i = 0; i < s.length - 1; i++) g.add(s.slice(i, i + 2)); return g; };
 const similar = (a, b) => { if (!a.size || !b.size) return 0; let n = 0; for (const x of a) if (b.has(x)) n++; return n / (a.size + b.size - n); };
@@ -549,7 +579,9 @@ export function refineContent(c, f) {
     return true;
   };
   for (const k of ORDER) {
-    if (Array.isArray(out[k])) {
+    if (k === 'skills' && Array.isArray(out[k])) {
+      out[k] = out[k].map((item) => { const p = String(item).split('|'); if (p.length < 3) return item; const t = sentences(p.slice(2).join(' ')).filter((s) => keep(s)).join(' '); return t ? `${p[0]}|${p[1]}|${t}` : ''; }).filter(Boolean);
+    } else if (Array.isArray(out[k])) {
       out[k] = out[k].map((item) => sentences(item).filter((s) => keep(s)).join(' ')).filter(Boolean);
     } else if (out[k]) {
       out[k] = sentences(out[k]).filter((s) => keep(s)).join(' ');
@@ -588,12 +620,14 @@ export function reportText(settings, facts, c) {
   sec(`이번 ${W === 2 ? '2주' : '주'} 학습 진도`, [...(facts.progress || []).map((p) => `${dateShort(p.date)} ${p.done}`), c.concepts]);
   sec(`이번 ${W === 2 ? '2주' : '주'} 시험 결과`, (facts.tests || []).map((t) => `${dateShort(t.date)} ${t.kind} ${t.score}${t.result ? ` (${t.result})` : ''}`));
   sec('학습 성취도', c.overview);
+  sec('영역별 학습 진단', (c.skills || []).map((x) => { const p = String(x).split('|'); return p.length >= 3 ? `${p[0]} (${p[1]} 단계): ${p.slice(2).join(' ')}` : x; }));
   sec('잘하고 있는 부분', c.strengths);
   sec(`${prevWord(W)}보다 성장한 부분`, c.growth);
   sec('조금 더 연습이 필요한 부분', c.practice);
   sec('어려워하는 학습 개념', c.weak_concepts);
   sec('학원에서 지도한 내용', c.academy_done);
   sec('학원에서 추가로 지도할 부분', c.academy_plan);
+  sec(`다음 ${W === 2 ? '2주' : '주'} 학습 목표`, c.goals);
   sec(`다음 ${W === 2 ? '2주' : '주'} 학습 예정`, c.next_week);
   sec('가정에서 도와주시면 좋은 부분', c.home_tips);
   sec('선생님 코멘트', c.teacher_comment);
@@ -666,6 +700,23 @@ export function homeworkChart(hw, weeks) {
   return `<div class="chart"><div class="ct">숙제 완료율</div>${hw.prev_rate != null ? row(weeks === 2 ? '지난 2주' : '지난주', hw.prev_rate, true) : ''}${row(weeks === 2 ? '이번 2주' : '이번 주', hw.rate, false)}</div>`;
 }
 
+const LEVEL_COLOR = { 도입: '#ffe3cc', 발전: '#fff1b8', 안정: '#d8f0c8', 심화: '#d8e8ff' };
+function skillsHtml(list) {
+  if (!list || !list.length) return '';
+  const rows = list.map((x) => {
+    const p = String(x).split('|');
+    if (p.length < 3) return `<div class="sk"><div class="skt">${esc(x)}</div></div>`;
+    const lv = p[1];
+    const idx = Math.max(0, ['도입', '발전', '안정', '심화'].indexOf(lv));
+    const steps = ['도입', '발전', '안정', '심화'].map((s, i) => `<span class="st${i <= idx ? ' on' : ''}" style="${i <= idx ? `background:${LEVEL_COLOR[lv] || '#e9e6ff'}` : ''}">${s}</span>`).join('');
+    return `<div class="sk"><div class="skh"><b>${esc(p[0])}</b><span class="steps">${steps}</span></div><div class="skt">${esc(p.slice(2).join(' '))}</div></div>`;
+  }).join('');
+  return `<div class="skills">${rows}</div><div class="sub" style="margin-top:6px">단계: 도입(처음 배우는 중) · 발전(도움을 받아 해내는 중) · 안정(스스로 정확히 해냄) · 심화(응용·확장)</div>`;
+}
+function goalsHtml(list) {
+  if (!list || !list.length) return '';
+  return `<ul class="goals">${list.map((g) => `<li><span class="gk">◎</span>${esc(g)}</li>`).join('')}</ul>`;
+}
 export function reportHtml(settings, r, facts, c, opts = {}) {
   const g = growthSettings(settings);
   const W = facts.period?.weeks || 1;
@@ -694,11 +745,13 @@ export function reportHtml(settings, r, facts, c, opts = {}) {
     sec(`이번 ${W === 2 ? '2주' : '주'} 학습 진도`, prog + p(c.concepts)),
     sec(`이번 ${W === 2 ? '2주' : '주'} 시험 결과`, tests ? testChart(facts.test_series, W) + tests : ''),
     sec('학습 성취도', ach),
+    sec('영역별 학습 진단', skillsHtml(c.skills), 'skills-sec'),
     sec('우리 아이가 잘하고 있는 부분', ul(c.strengths), 'mint'),
     sec(`${prevWord(W)}보다 성장한 부분`, ul(c.growth), 'sky'),
     sec('조금 더 연습이 필요한 부분', ul(c.practice), 'lemon'),
     sec('이해가 부족하거나 어려워하는 학습 개념', ul(c.weak_concepts), 'peach'),
     sec('학원에서 추가로 지도할 부분', academy, 'lilac'),
+    sec(`다음 ${W === 2 ? '2주' : '주'} 학습 목표`, goalsHtml(c.goals), 'sky'),
     sec(`다음 ${W === 2 ? '2주' : '주'} 학습 예정 내용`, p(c.next_week) || p(facts.next_plan ? `다음에는 ${facts.next_plan}을(를) 학습할 예정이에요.` : '')),
     sec('가정에서 함께 도와주시면 좋은 부분', ul(c.home_tips)),
     sec('선생님의 특별 코멘트', p(c.teacher_comment), 'note-sec'),
@@ -726,6 +779,9 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 .works{display:grid;gap:12px}.work{margin:0;display:grid;grid-template-columns:minmax(110px,38%) 1fr;gap:12px;align-items:start;border:1px solid #efecf6;border-radius:14px;padding:10px;background:#fcfbff}
 .work img{width:100%;border-radius:10px;background:#eee;display:block}.work .wt{font-size:12px;font-weight:700;color:#5b6bb5;margin-bottom:2px}.work p{font-size:14px;margin:4px 0 0}
 @media (max-width:480px){.work{grid-template-columns:1fr}}
+.skills{display:grid;gap:8px}.sk{border:1px solid #efecf6;border-radius:12px;padding:10px 12px;background:#fff}.skh{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px}.skh b{font-size:14px;min-width:64px}
+.steps{display:inline-flex;gap:3px}.st{font-size:11px;padding:2px 7px;border-radius:999px;background:#f3f1fa;color:#9a9db0}.st.on{color:#2b2a33;font-weight:600}.skt{font-size:14px}
+.goals{list-style:none;padding-left:0}.goals li{margin:5px 0;padding-left:22px;position:relative}.gk{position:absolute;left:0;color:#5b6bb5}
 .photos{margin-top:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}.photos img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px;background:#eee}
 .note{background:#fff8e6;border-radius:10px;padding:8px 12px;font-size:13px;color:#7a6020;margin-bottom:10px}
 .tools{display:flex;gap:8px;justify-content:flex-end;margin-bottom:10px}.tools button{border:1px solid #dcd7ea;background:#fff;border-radius:999px;padding:7px 14px;font:inherit;font-size:13px;cursor:pointer}
