@@ -557,30 +557,19 @@ export async function polishField(env, settings, facts, field, text) {
   throw lastErr || new Error('AI 호출 실패');
 }
 
-/** 원장님이 고친 리포트 전체를 한 번에 다듬기 (적은 뜻은 살리고, 빈 칸은 비워 둔 채로) */
-export async function polishAll(env, settings, facts, content) {
+/** 원장님이 고친 리포트 전체 다듬기 — 고친 칸만, 칸마다 동시에 (기다리는 시간 = 가장 긴 칸 하나) */
+export async function polishAll(env, settings, facts, content, base) {
   if (!env.AI) throw new Error('Workers AI가 연결되지 않았어요');
-  const g = growthSettings(settings);
-  const models = [g.model, ...FALLBACK_MODELS.filter((m) => m !== g.model)];
   const src = cleanContent(content || {});
-  const guide = Object.entries(FIELD_GUIDE).map(([k, v]) => `- ${k}: ${v}`).join('\n');
-  const ask = `${facts ? `기록 요약:\n${briefFor(facts)}\n\n` : ''}칸별 형식:\n${guide}\n\n원장님이 적은 리포트(JSON):\n${JSON.stringify(src)}\n\n`
-    + '각 칸의 원장님 메모를 다듬어 같은 키의 JSON 하나만 출력하세요. 원장님이 비워 둔 칸("" 또는 [])은 비워 둡니다. 여러 칸에 같은 문장을 되풀이하지 않습니다.';
-  let lastErr = null;
-  for (const model of models) {
-    try {
-      const r = await env.AI.run(model, { messages: [{ role: 'system', content: MEMO_SYSTEM }, { role: 'user', content: ask }], max_tokens: 3000, temperature: 0.4 });
-      const out = cleanContent(parseJson(aiText(r)));
-      // 원장님이 비워 둔 칸은 비워 두고, AI가 빠뜨린 칸은 원래 메모 그대로
-      for (const k of SECTION_KEYS) {
-        const empty = (v) => (Array.isArray(v) ? !v.length : !String(v || '').trim());
-        if (empty(src[k])) out[k] = src[k];
-        else if (empty(out[k])) out[k] = src[k];
-      }
-      return refineContent(out, facts);
-    } catch (e) { lastErr = e; }
-  }
-  throw lastErr || new Error('AI 호출 실패');
+  const orig = base ? cleanContent(base) : null;
+  const same = (a, b) => JSON.stringify(a || '') === JSON.stringify(b || '');
+  const empty = (v) => (Array.isArray(v) ? !v.length : !String(v || '').trim());
+  // 원장님이 손댄 칸만 다듬어요 (AI가 쓴 그대로인 칸은 건드리지 않아 빨라요)
+  const keys = SECTION_KEYS.filter((k) => !empty(src[k]) && (!orig || !same(src[k], orig[k])));
+  const out = { ...src };
+  const res = await Promise.all(keys.map((k) => polishField(env, settings, facts, k, Array.isArray(src[k]) ? src[k].join('\n') : src[k]).then((v) => [k, v]).catch(() => [k, src[k]])));
+  for (const [k, v] of res) out[k] = v;
+  return { content: refineContent(out, facts), changed: keys };
 }
 
 /** AI를 못 쓸 때: 기록만으로 정리 (지어내지 않고, 기록을 날짜·평가와 함께 문장으로 옮기기만) */

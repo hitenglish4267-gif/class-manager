@@ -874,7 +874,7 @@ export async function handleApi(request, env, ctx, url, version) {
     },
     'POST /api/report/polish-all': async () => {
       const r = await reportRow(env, me, body.id);
-      return { content: await polishAll(env, await getSettings(env), JSON.parse(r.facts || '{}'), body.content || {}) };
+      return polishAll(env, await getSettings(env), JSON.parse(r.facts || '{}'), body.content || {}, body.base || null);
     },
     'GET /api/works': async () => {
       const s = await assertStudent(env, me, url.searchParams.get('student_id'));
