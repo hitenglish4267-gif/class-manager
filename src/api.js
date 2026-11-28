@@ -11,7 +11,7 @@ import { renderTemplate, checkKakaoFields, kakaoVariables, kakaoFieldText } from
 import { RECOMMENDED_KAKAO, DEFAULT_SMS, KIND_LABELS, CUSHION_LABELS, BASIC_ONLY_KINDS } from './defaults.js';
 import { worksList, workRow, workUpload, workUpdate, workDelete, workImage, workAnalyze, worksForReport, WORK_TYPES } from './works.js';
 import { mediaStart, mediaPart, mediaComplete, mediaDelete, mediaList, r2Ready } from './media.js';
-import { evalDay, saveEvalMarks, saveDayNote, saveEvalDayItems, processQueue, contentOf, cleanContent, ruleWrite, reportHtml, reportText, growthSettings, periodFor, polishComment, NOTE_FIELDS, EVAL_MARKS, oneWeek, REPORT_KIND, MSG_KIND } from './growth.js';
+import { evalDay, saveEvalMarks, saveDayNote, saveEvalDayItems, processQueue, contentOf, cleanContent, ruleWrite, reportHtml, reportText, growthSettings, periodFor, polishComment, polishField, polishAll, NOTE_FIELDS, EVAL_MARKS, oneWeek, REPORT_KIND, MSG_KIND } from './growth.js';
 
 const SESSION_DAYS = 60;
 
@@ -867,8 +867,14 @@ export async function handleApi(request, env, ctx, url, version) {
     'POST /api/report/polish': async () => {
       const r = await reportRow(env, me, body.id);
       const text = String(body.text || '').trim();
-      if (!text) throw bad('코멘트를 먼저 적어 주세요');
-      return { text: await polishComment(env, await getSettings(env), JSON.parse(r.facts || '{}'), text) };
+      if (!text) throw bad('먼저 짧게라도 적어 주세요');
+      const field = String(body.field || 'teacher_comment');
+      const out = await polishField(env, await getSettings(env), JSON.parse(r.facts || '{}'), field, text);
+      return Array.isArray(out) ? { list: out, text: out.join('\n') } : { text: out };
+    },
+    'POST /api/report/polish-all': async () => {
+      const r = await reportRow(env, me, body.id);
+      return { content: await polishAll(env, await getSettings(env), JSON.parse(r.facts || '{}'), body.content || {}) };
     },
     'GET /api/works': async () => {
       const s = await assertStudent(env, me, url.searchParams.get('student_id'));
