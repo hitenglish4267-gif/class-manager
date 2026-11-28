@@ -72,6 +72,28 @@ export function periodFor(settings, ref) {
 export function weekOf(ref, settings) { return periodFor(settings, ref); }
 /** 1주 성장 리포트 (2주 리포트와 따로, 원할 때 만들어 보기) */
 export function oneWeek(settings) { return { ...settings, growth: { ...growthSettings(settings), weeks: 1 } }; }
+// ───────── 반별 다음 기간 계획 (Weekly Plan) ─────────
+export const PLAN_FIELDS = [
+  ['class', 'Class name'], ['book', 'Book'], ['theme', 'Theme'], ['story', 'Story'], ['grammar', 'Grammar'],
+  ['cc4', '4CC (Target grammar)'], ['writing', 'Writing (영어홀릭)'], ['etc', '기타'],
+];
+export async function planFor(env, studentId, rkind, ref) {
+  const mk = MSG_KIND[rkind];
+  if (!mk) return null;
+  const row = await first(env, `SELECT p.fields FROM class_plans p JOIN students s ON s.class_id = p.class_id WHERE s.id = ? AND p.kind = ? AND p.ref = ?`, Number(studentId), mk, ref).catch(() => null);
+  if (!row) return null;
+  try { const f = JSON.parse(row.fields || '{}'); return PLAN_FIELDS.some(([k]) => String(f[k] || '').trim() && k !== 'class') ? f : null; } catch { return null; }
+}
+function planHtml(plan, L) {
+  if (!plan) return '';
+  const rows = PLAN_FIELDS.filter(([k]) => String(plan[k] || '').trim()).map(([k, label]) => `<div class="pl-row"><span class="pl-k">■ ${esc(label)}</span><span class="pl-v">${esc(plan[k]).replace(/\n/g, '<br>')}</span></div>`).join('');
+  return rows ? `<div class="plan"><div class="pl-t">[${L.next === '다음 주' ? 'Weekly' : L.next === '다음 2주' ? 'Bi-weekly' : L.next === '다음 달' ? 'Monthly' : 'Next'} Plan]</div>${rows}</div>` : '';
+}
+function planText(plan) {
+  if (!plan) return [];
+  return PLAN_FIELDS.filter(([k]) => String(plan[k] || '').trim()).map(([k, label]) => `${label}: ${String(plan[k]).replace(/\n/g, ' / ')}`);
+}
+
 export const REPORT_KIND = { growth: 'weekly', growth1: 'week1', growth_m: 'month', growth_q: 'quarter', consult: 'consult' };
 export const MSG_KIND = { weekly: 'growth', week1: 'growth1', month: 'growth_m', quarter: 'growth_q' }; // consult는 메시지 없이 리포트만
 
@@ -459,6 +481,7 @@ export function briefFor(f) {
   }
   if (f.progress_rate != null) add(`계획한 진도 달성: ${f.progress_rate}%`);
   if (f.next_plan) add(`다음 학습 예정: ${f.next_plan}`);
+  if (f.plan) add(`다음 기간 수업 계획 (반 공통, next_week는 이 계획에 맞춰 자연스럽게 2문장으로): ${planText(f.plan).join(' / ')}`);
   if (f.tests?.length) {
     add('시험:');
     for (const t of f.tests) add(`- ${dateShort(t.date)} ${t.kind} ${t.score}${t.result ? ` (${t.result})` : ''}`);
@@ -705,6 +728,8 @@ export async function processQueue(env, opts = {}) {
     const facts = JSON.parse(r.facts || '{}');
     const stamp = kstNow().stamp;
     try {
+      const plan = await planFor(env, r.student_id, r.kind, r.ref);
+      if (plan) facts.plan = plan;
       const { content, model } = await aiWrite(env, settings, facts);
       await run(env, "UPDATE reports SET ai = ?, source = 'ai', model = ?, status = 'ready', error = '', tries = tries + 1, updated_at = ? WHERE id = ?", JSON.stringify(content), model, stamp, r.id);
     } catch (e) {
@@ -786,7 +811,7 @@ export function growthVars(settings, baseUrl, r, facts) {
 }
 
 // ───────── 텍스트 (카카오톡 복사용) ─────────
-export function reportText(settings, facts, c) {
+export function reportText(settings, facts, c, plan) {
   const L = [];
   const sec = (t, body) => { const b = Array.isArray(body) ? body.filter(Boolean).map((x) => `- ${x}`).join('\n') : String(body || '').trim(); if (b) L.push(`■ ${t}\n${b}`); };
   const W = facts.period || 1;
@@ -802,7 +827,7 @@ export function reportText(settings, facts, c) {
   sec('학원에서 지도한 내용', c.academy_done);
   sec('학원에서 추가로 지도할 부분', c.academy_plan);
   sec(`${labelsOf(W).next} 학습 목표`, c.goals);
-  sec(`${labelsOf(W).next} 학습 예정`, c.next_week);
+  sec(`${labelsOf(W).next} 학습 예정`, [...planText(plan), c.next_week].filter(Boolean));
   sec('가정에서 도와주시면 좋은 부분', c.home_tips);
   sec('상담 때 함께 이야기 나눌 부분', c.consult_points);
   sec('선생님 코멘트', c.teacher_comment);
@@ -928,7 +953,7 @@ export function reportHtml(settings, r, facts, c, opts = {}) {
     sec('이해가 부족하거나 어려워하는 학습 개념', ul(c.weak_concepts), 'peach'),
     sec('학원에서 추가로 지도할 부분', academy, 'lilac'),
     sec(`${labelsOf(W).next} 학습 목표`, goalsHtml(c.goals), 'sky'),
-    sec(`${labelsOf(W).next} 학습 예정 내용`, p(c.next_week) || p(facts.next_plan ? `다음에는 ${facts.next_plan}을(를) 학습할 예정이에요.` : '')),
+    sec(`${labelsOf(W).next} 학습 예정 내용`, planHtml(opts.plan, labelsOf(W)) + (p(c.next_week) || p(facts.next_plan ? `다음에는 ${facts.next_plan}을(를) 학습할 예정이에요.` : ''))),
     sec('가정에서 함께 도와주시면 좋은 부분', ul(c.home_tips)),
     sec('상담 때 함께 이야기 나눌 부분', ul(c.consult_points), 'lilac'),
     sec('선생님의 특별 코멘트', p(c.teacher_comment), 'note-sec'),
@@ -959,6 +984,8 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 .skills{display:grid;gap:8px}.sk{border:1px solid #efecf6;border-radius:12px;padding:10px 12px;background:#fff}.skh{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px}.skh b{font-size:14px;min-width:64px}
 .steps{display:inline-flex;gap:3px}.st{font-size:11px;padding:2px 7px;border-radius:999px;background:#f3f1fa;color:#9a9db0}.st.on{color:#2b2a33;font-weight:600}.skt{font-size:14px}
 .goals{list-style:none;padding-left:0}.goals li{margin:5px 0;padding-left:22px;position:relative}.gk{position:absolute;left:0;color:#5b6bb5}
+.plan{border:1px solid #e4e0f2;border-radius:12px;padding:10px 14px;background:#fbfaff;margin:4px 0 10px}.pl-t{font-weight:800;color:#5b56a8;margin-bottom:4px}.pl-row{display:grid;grid-template-columns:150px 1fr;gap:8px;font-size:14px;padding:3px 0}.pl-k{color:#4b5068;font-weight:600}
+@media (max-width:480px){.pl-row{grid-template-columns:1fr;gap:0}.pl-v{padding-left:14px}}
 .photos{margin-top:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}.photos img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px;background:#eee}
 .note{background:#fff8e6;border-radius:10px;padding:8px 12px;font-size:13px;color:#7a6020;margin-bottom:10px}
 .tools{display:flex;gap:8px;justify-content:flex-end;margin-bottom:10px}.tools button{border:1px solid #dcd7ea;background:#fff;border-radius:999px;padding:7px 14px;font:inherit;font-size:13px;cursor:pointer}
@@ -1016,7 +1043,8 @@ export async function reportPage(env, request, token) {
   const facts = JSON.parse(r.facts || '{}');
   const c = contentOf(r) || cleanContent(ruleWrite(facts));
   const works = facts.period ? await worksForReport(env, r.student_id, facts.period.from, facts.period.to).catch(() => []) : [];
-  return new Response(reportHtml(settings, r, facts, c, { works }), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' } });
+  const plan = await planFor(env, r.student_id, r.kind, r.ref);
+  return new Response(reportHtml(settings, r, facts, c, { works, plan }), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' } });
 }
 /** 리포트 속 결과물 사진: 리포트 비밀번호를 통과한 경우에만 */
 export async function reportWorkImage(env, request, token, wtoken) {

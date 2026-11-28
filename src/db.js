@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS daynotes (date TEXT, student_id INTEGER, teacher_id I
 CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, ref TEXT, student_id INTEGER, token TEXT, facts TEXT, ai TEXT, edited TEXT, source TEXT DEFAULT '', model TEXT DEFAULT '', status TEXT DEFAULT 'queued', error TEXT DEFAULT '', tries INTEGER DEFAULT 0, fails INTEGER DEFAULT 0, fail_at INTEGER DEFAULT 0, viewed_at TEXT, created_at TEXT, updated_at TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS reports_uk ON reports(kind, ref, student_id);
 CREATE UNIQUE INDEX IF NOT EXISTS reports_token ON reports(token);
+CREATE TABLE IF NOT EXISTS class_plans (class_id INTEGER, kind TEXT, ref TEXT, fields TEXT, updated_at TEXT, PRIMARY KEY(class_id, kind, ref));
 CREATE TABLE IF NOT EXISTS solo_days (date TEXT, student_id INTEGER, updated_at TEXT, PRIMARY KEY(date, student_id));
 CREATE TABLE IF NOT EXISTS track_days (date TEXT, class_id INTEGER, keys TEXT, updated_at TEXT, PRIMARY KEY(date, class_id));
 CREATE TABLE IF NOT EXISTS works (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT, student_id INTEGER, date TEXT, r2key TEXT, mime TEXT, size INTEGER, type TEXT DEFAULT 'writing', memo TEXT DEFAULT '', comment TEXT DEFAULT '', ai TEXT DEFAULT '', include INTEGER DEFAULT 1, status TEXT DEFAULT 'new', error TEXT DEFAULT '', model TEXT DEFAULT '', teacher_id INTEGER, created_at TEXT, updated_at TEXT);
