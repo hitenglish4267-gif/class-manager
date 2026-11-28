@@ -145,6 +145,7 @@ function testSummary(rows) {
 }
 
 /** 학생 한 명의 한 주 사실 (리포트의 숫자·진도는 전부 여기서) */
+export const isVoca = (kind) => /voca|vocab|단어|word|spelling|스펠/i.test(String(kind || ''));
 export function buildFacts(settings, s, cur, prev, period) {
   const { items } = evalSettings(settings);
   const nameOf = (id) => (items.find((i) => i.id === id) || {}).name || '';
@@ -193,7 +194,9 @@ export function buildFacts(settings, s, cur, prev, period) {
   const scored = testsNow.filter((t) => t.pct != null);
   // 그래프용: 지난 기간 + 이번 기간 시험 점수(%)
   const toPt = (t, period) => (t.correct != null && t.total ? { date: t.date, kind: t.kind, pct: Math.round((t.correct / t.total) * 100), period } : null);
-  const testSeries = [...(prev.tests.get(s.id) || []).map((t) => toPt(t, 'prev')), ...(cur.tests.get(s.id) || []).map((t) => toPt(t, 'cur'))].filter(Boolean);
+  // 그래프는 단어 시험은 빼고, Weekly·Monthly(단원·최종 평가) 점수를 지난 6개월 누적으로
+  const hist = (cur.history && cur.history.get(s.id)) || [...(prev.tests.get(s.id) || []), ...(cur.tests.get(s.id) || [])];
+  const testSeries = hist.filter((t) => !isVoca(t.kind)).map((t) => toPt(t, t.date >= period.from && t.date <= period.to ? 'cur' : 'prev')).filter(Boolean);
   const prevScored = (prev.tests.get(s.id) || []).filter((t) => t.correct != null && t.total);
 
   const evNow = evalSummary(cur.evals.get(s.id), nameOf);
@@ -249,7 +252,10 @@ function hasData(f) {
 export async function ensureReports(env, settings, ref, rkind = 'weekly') {
   const w = periodFor(settings, ref);
   const prevW = { from: addDays(w.from, -7 * w.weeks), to: addDays(w.to, -7 * w.weeks) };
-  const [cur, prev] = await Promise.all([rangeData(env, w.from, w.to), rangeData(env, prevW.from, prevW.to)]);
+  const [cur, prev, hist] = await Promise.all([rangeData(env, w.from, w.to), rangeData(env, prevW.from, prevW.to),
+    all(env, 'SELECT student_id, date, kind, correct, total FROM tests WHERE date >= ? AND date <= ? AND correct IS NOT NULL AND total > 0 ORDER BY date', addDays(w.to, -180), w.to)]);
+  cur.history = new Map();
+  for (const t of hist) { if (!cur.history.has(t.student_id)) cur.history.set(t.student_id, []); cur.history.get(t.student_id).push(t); }
   // 진도 기록에 교재 이름 붙이기
   const curNames = new Map((await all(env, 'SELECT id, name FROM curricula')).map((c) => [c.id, c.name]));
   for (const l of cur.logs.values()) l.book = curNames.get(l.curriculum_id) || '';
@@ -644,8 +650,9 @@ const SERIES = ['#2a78d6', '#eb6834', '#1baf7a']; // 검증된 기본 팔레트 
 
 /** 시험 점수 추이: 지난 기간 + 이번 기간, 시험 종류별 선 (최대 3종류) */
 export function testChart(series, weeks) {
-  const pts = (series || []).filter((p) => p.pct != null);
-  if (pts.length < 2) return '';
+  const pts = (series || []).filter((p) => p.pct != null && !isVoca(p.kind));
+  // 이번 기간에 Weekly·Monthly 시험이 있을 때만, 누적 점수가 2개 이상일 때만 그려요
+  if (pts.length < 2 || !pts.some((p) => p.period === 'cur')) return '';
   const kindsAll = [...new Set(pts.map((p) => p.kind))];
   const kinds = kindsAll.sort((a, b) => pts.filter((p) => p.kind === b).length - pts.filter((p) => p.kind === a).length).slice(0, 3);
   const dates = [...new Set(pts.filter((p) => kinds.includes(p.kind)).map((p) => p.date))].sort();
@@ -663,7 +670,7 @@ export function testChart(series, weeks) {
   if (lastPrev && firstCur) {
     const mid = (x(lastPrev) + x(firstCur)) / 2;
     shade = `<rect x="${L}" y="${T}" width="${mid - L}" height="${H - T - B}" fill="#f3f2f8"/>
-      <text x="${(L + mid) / 2}" y="${T - 8}" text-anchor="middle" class="ax">${weeks === 2 ? '지난 2주' : '지난주'}</text>
+      <text x="${(L + mid) / 2}" y="${T - 8}" text-anchor="middle" class="ax">이전 기록</text>
       <text x="${(mid + W - R) / 2}" y="${T - 8}" text-anchor="middle" class="ax">${weeks === 2 ? '이번 2주' : '이번 주'}</text>`;
   }
   const grid = [lo, Math.round((lo + 100) / 2), 100].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#e6e4ee" stroke-width="1"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" class="ax">${v}</text>`).join('');
@@ -689,7 +696,7 @@ export function testChart(series, weeks) {
   for (let i = 1; i < labels.length; i++) if (labels[i].y - labels[i - 1].y < 14) labels[i].y = labels[i - 1].y + 14;
   const endLabels = labels.map((l) => `<text x="${W - R + 8}" y="${l.y + 4}" class="lb">${esc(l.text)}</text>`).join('');
   const legend = kinds.length >= 2 ? `<div class="legend">${kinds.map((k, i) => `<span><i style="background:${SERIES[i]}"></i>${esc(k)}</span>`).join('')}</div>` : '';
-  return `<div class="chart"><div class="ct">시험 점수 추이 <small>(맞은 비율 %)</small></div>${legend}
+  return `<div class="chart"><div class="ct">단원·최종 평가 점수 추이 <small>(최근 6개월 누적, 맞은 비율 %)</small></div>${legend}
 <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="시험 점수 추이 그래프">${shade}${grid}${xlab}${lines}${endLabels}</svg></div>`;
 }
 
