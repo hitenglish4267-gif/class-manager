@@ -11,7 +11,7 @@ import { renderTemplate, checkKakaoFields, kakaoVariables, kakaoFieldText } from
 import { RECOMMENDED_KAKAO, DEFAULT_SMS, KIND_LABELS, CUSHION_LABELS, BASIC_ONLY_KINDS } from './defaults.js';
 import { worksList, workRow, workUpload, workUpdate, workDelete, workImage, workAnalyze, worksForReport, WORK_TYPES } from './works.js';
 import { mediaStart, mediaPart, mediaComplete, mediaDelete, mediaList, r2Ready } from './media.js';
-import { evalDay, saveEvalMarks, saveDayNote, saveEvalDayItems, processQueue, contentOf, cleanContent, ruleWrite, reportHtml, reportText, growthSettings, periodFor, polishComment, polishField, polishAll, NOTE_FIELDS, EVAL_MARKS, oneWeek, REPORT_KIND, MSG_KIND, periodOfKind, ensureReports } from './growth.js';
+import { evalDay, saveEvalMarks, saveDayNote, saveEvalDayItems, processQueue, contentOf, cleanContent, ruleWrite, reportHtml, reportText, growthSettings, periodFor, polishComment, polishField, polishAll, NOTE_FIELDS, EVAL_MARKS, oneWeek, REPORT_KIND, MSG_KIND, periodOfKind, ensureReports, planFor, PLAN_FIELDS } from './growth.js';
 
 const SESSION_DAYS = 60;
 
@@ -397,11 +397,12 @@ async function reportGet(env, me, url) {
   const facts = JSON.parse(r.facts || '{}');
   const c = contentOf(r) || cleanContent(ruleWrite(facts));
   const works = facts.period ? await worksForReport(env, r.student_id, facts.period.from, facts.period.to) : [];
+  const plan = await planFor(env, r.student_id, r.kind, r.ref);
   const base = String(settings.base_url || '').replace(/\/+$/, '');
   return {
     id: r.id, student: r.student_name, student_id: r.student_id, kind: r.kind, ref: r.ref, status: r.status, source: r.source, model: r.model, error: r.error, edited: !!r.edited,
     viewed_at: r.viewed_at, link: base ? `${base}/r/${r.token}` : `/r/${r.token}`, content: c,
-    text: reportText(settings, facts, c), html: reportHtml(settings, r, facts, c, { noTools: true, works, workSrc: (w) => `/api/works/${w.id}/img` }),
+    text: reportText(settings, facts, c, plan), html: reportHtml(settings, r, facts, c, { noTools: true, works, plan, workSrc: (w) => `/api/works/${w.id}/img` }),
   };
 }
 async function reportEdit(env, me, body) {
@@ -870,6 +871,30 @@ export async function handleApi(request, env, ctx, url, version) {
       const field = String(body.field || 'teacher_comment');
       const out = await polishField(env, await getSettings(env), JSON.parse(r.facts || '{}'), field, text);
       return Array.isArray(out) ? { list: out, text: out.join('\n') } : { text: out };
+    },
+    // 반별 다음 기간 계획 (Weekly Plan) — 성장 리포트 "다음 학습 예정"에 들어가요
+    'GET /api/plans': async () => {
+      const kind = String(url.searchParams.get('kind') || 'growth');
+      if (!REPORT_KIND[kind] || kind === 'consult') throw bad('리포트 종류가 올바르지 않아요');
+      const ref = periodOfKind(await getSettings(env), REPORT_KIND[kind], String(url.searchParams.get('ref') || kstNow().date)).ref;
+      const ctx = await buildDay(env, kstNow().date, { allDays: true, teacherId: me.role === 'teacher' ? me.id : null });
+      const rows = await all(env, 'SELECT class_id, fields FROM class_plans WHERE kind = ? AND ref = ?', kind, ref);
+      const saved = new Map(rows.map((r) => { let f = {}; try { f = JSON.parse(r.fields || '{}'); } catch { /* */ } return [r.class_id, f]; }));
+      return { kind, ref, fields: PLAN_FIELDS, classes: ctx.classes.filter((c) => c.type !== 'individual').map((c) => {
+        const books = (c.tracks || []).filter((t) => t.name && !t.free).map((t) => t.name).join(', ');
+        return { id: c.id, name: c.name, saved: saved.has(c.id), fields: saved.get(c.id) || { class: c.name, book: books } };
+      }) };
+    },
+    'POST /api/plans': async () => {
+      if (!(await teacherOwnsClass(env, me, body.class_id))) throw new HttpError(403, '내 반이 아니에요');
+      const kind = String(body.kind || 'growth');
+      if (!REPORT_KIND[kind] || kind === 'consult') throw bad('리포트 종류가 올바르지 않아요');
+      const ref = periodOfKind(await getSettings(env), REPORT_KIND[kind], String(body.ref || kstNow().date)).ref;
+      const f = {};
+      for (const [k] of PLAN_FIELDS) f[k] = String((body.fields || {})[k] || '').slice(0, 500);
+      await run(env, `INSERT INTO class_plans (class_id, kind, ref, fields, updated_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(class_id, kind, ref) DO UPDATE SET fields = excluded.fields, updated_at = excluded.updated_at`, Number(body.class_id), kind, ref, JSON.stringify(f), kstNow().stamp);
+      return { ok: true, saved_at: kstNow().stamp };
     },
     // 상담용 리포트: 학생 한 명, 최근 3개월
     'POST /api/report/consult': async () => {

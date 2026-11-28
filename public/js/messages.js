@@ -131,6 +131,7 @@ export async function renderMessages(main) {
     bar.replaceChildren(
       h('button', { class: 'btn small', disabled: !canCheck.length, onclick: () => bulk(canCheck, 1) }, G ? '모두 승인' : '모두 체크'),
       h('button', { class: 'btn small', disabled: !canUncheck.length, onclick: () => bulk(canUncheck, 0) }, G ? '승인 모두 해제' : '모두 해제'),
+      G ? h('button', { class: 'btn small', onclick: () => openPlans(kind, ref, load) }, '📋 반별 다음 계획') : null,
       G && queued ? h('button', { class: 'btn small primary', 'data-ai-btn': '1', onclick: (e) => runAi(e.target) }, `AI로 지금 쓰기 (${queued}명 남음)`) : null,
       data && (data.generated || data.list.length) ? h('button', { class: 'btn small ghost', onclick: async (e) => {
         e.target.disabled = true; await outbox.flushAll(); await api('/api/messages/generate', { kind, ref }); toast('최신 수업 기록으로 다시 만들었어요'); load();
@@ -444,4 +445,32 @@ async function renderConsult(main, seg) {
     } catch { /* */ }
   }
   draw(); loadMade();
+}
+
+// ───────── 반별 다음 기간 계획 (Weekly Plan): 성장 리포트 "다음 학습 예정"에 그대로 들어가요 ─────────
+async function openPlans(kind, ref, onDone) {
+  let D;
+  try { D = await api(`/api/plans?kind=${kind}&ref=${ref}`); } catch (e) { toast(e.message, true); return; }
+  sheet('반별 다음 계획 (Weekly Plan)', () => {
+    const wrap = h('div', { class: 'stack' },
+      h('div', { class: 'note small' }, '반마다 다음 기간 수업 계획을 적어 두면, 그 반 학생들의 성장 리포트 "다음 학습 예정" 칸에 표처럼 들어가요. 빈칸은 리포트에 나오지 않아요. 입력하면 자동 저장돼요. 이미 AI가 쓴 리포트에도 바로 보여요.'));
+    if (!D.classes.length) wrap.append(h('div', { class: 'card empty' }, '그룹 반이 없어요.'));
+    for (const c of D.classes) {
+      const f = { ...c.fields };
+      const st = h('span', { class: 'tiny muted' }, c.saved ? '저장됨' : '');
+      const save = debounce(async () => {
+        st.textContent = '저장 중…';
+        try { await api('/api/plans', { class_id: c.id, kind, ref, fields: f }); st.textContent = '저장됨'; } catch (e) { st.textContent = '저장 실패'; toast(e.message, true); }
+      }, 900);
+      const body = h('div', { class: 'stack mt-s' + (c.saved ? '' : ' hidden') }, ...D.fields.map(([k, label]) => {
+        const multi = k === 'cc4' || k === 'writing' || k === 'etc' || k === 'grammar';
+        const inp = h(multi ? 'textarea' : 'input', { class: 'input', rows: multi ? 2 : undefined, value: f[k] || '', placeholder: label, oninput: () => { f[k] = inp.value; save(); } });
+        return h('label', { class: 'field' }, h('span', { class: 'lbl' }, `■ ${label}`), inp);
+      }));
+      wrap.append(h('div', { class: 'card card-pad' },
+        h('div', { class: 'row', style: { cursor: 'pointer' }, onclick: () => body.classList.toggle('hidden') }, h('b', null, c.name), st, h('span', { class: 'grow' }), h('span', { class: 'tiny muted' }, c.saved ? '열기 ▾' : '계획 적기 ▾')),
+        body));
+    }
+    return wrap;
+  }, { onClose: () => onDone && onDone() });
 }
