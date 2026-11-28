@@ -247,10 +247,10 @@ export async function renderMessages(main) {
   async function openReport(m) {
     let R;
     try { R = await api(`/api/report?id=${m.report_id}`); } catch (e) { toast(e.message, true); return; }
-    const FIELDS = [['overview', '학습 성취도 (총평)'], ['concepts', '이번 주 주요 학습 개념'], ['strengths', '잘하고 있는 부분'], ['growth', '지난주보다 성장한 부분'],
+    const FIELDS = [['overview', '학습 성취도 (총평)'], ['skills', '영역별 학습 진단 (한 줄에 "영역|단계|진단", 단계: 도입·발전·안정·심화)'], ['concepts', '이번 주 주요 학습 개념'], ['strengths', '잘하고 있는 부분'], ['growth', '지난주보다 성장한 부분'],
       ['practice', '조금 더 연습이 필요한 부분'], ['weak_concepts', '어려워하는 학습 개념'], ['academy_done', '이번 주 학원에서 지도한 내용'], ['academy_plan', '앞으로 학원에서 지도할 계획'],
-      ['next_week', '다음 주 학습 예정'], ['home_tips', '가정에서 도와주시면 좋은 부분'], ['teacher_comment', '선생님의 특별 코멘트']];
-    const LIST = new Set(['strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'home_tips']);
+      ['goals', '다음 기간 학습 목표'], ['next_week', '다음 주 학습 예정'], ['home_tips', '가정에서 도와주시면 좋은 부분'], ['teacher_comment', '선생님의 특별 코멘트']];
+    const LIST = new Set(['skills', 'strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'goals', 'home_tips']);
     sheet(`${R.student} 주간 성장 리포트`, (close) => {
       const frame = h('iframe', { class: 'rep-frame', title: '리포트 미리보기' });
       frame.srcdoc = R.html;
