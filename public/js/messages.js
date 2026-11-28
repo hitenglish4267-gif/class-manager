@@ -125,7 +125,7 @@ export async function renderMessages(main) {
     bar.replaceChildren(
       h('button', { class: 'btn small', disabled: !canCheck.length, onclick: () => bulk(canCheck, 1) }, G ? '모두 승인' : '모두 체크'),
       h('button', { class: 'btn small', disabled: !canUncheck.length, onclick: () => bulk(canUncheck, 0) }, G ? '승인 모두 해제' : '모두 해제'),
-      G && queued ? h('button', { class: 'btn small primary', onclick: (e) => runAi(e.target) }, `AI로 지금 쓰기 (${queued}명 남음)`) : null,
+      G && queued ? h('button', { class: 'btn small primary', 'data-ai-btn': '1', onclick: (e) => runAi(e.target) }, `AI로 지금 쓰기 (${queued}명 남음)`) : null,
       data && (data.generated || data.list.length) ? h('button', { class: 'btn small ghost', onclick: async (e) => {
         e.target.disabled = true; await outbox.flushAll(); await api('/api/messages/generate', { kind, ref }); toast('최신 수업 기록으로 다시 만들었어요'); load();
       } }, '미리보기 다시 만들기') : null,
@@ -217,6 +217,8 @@ export async function renderMessages(main) {
     while (left > 0 && guard++ < 60) {
       try { const r = await api('/api/report/process', { ref, kind }); left = r.left; if (btn) btn.textContent = left ? `AI가 쓰는 중… (${left}명 남음)` : '다 썼어요'; }
       catch (e) { toast(e.message, true); break; }
+      // 다 쓰기 전에도 학생 목록을 바로 보여 주고, 몇 명씩 끝날 때마다 새로 고침
+      if (guard === 1 || guard % 3 === 0) { toast(left ? `AI가 리포트를 쓰는 중이에요 (${left}명 남음). 화면을 닫아도 계속 써요.` : '리포트를 다 썼어요'); await load(); btn = document.querySelector('[data-ai-btn]') || btn; }
     }
     load();
   }
