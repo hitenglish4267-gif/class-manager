@@ -335,7 +335,7 @@ export const RECOMMENDED_KAKAO = {
   },
 };
 
-export const KIND_LABELS = { daily: '일간 리포트', missing: '미제출 알림', weekly: '주간 리포트', monthly: '월간 리포트', att: '출결 즉시 알림', late: '지각 즉시 알림', hw5: '숙제 누적 5회 알림', growth: '성장 리포트 (2주)', daily_photo: '일간 리포트 (사진·영상 있는 날)' };
+export const KIND_LABELS = { daily: '일간 리포트', missing: '미제출 알림', weekly: '주간 리포트', monthly: '월간 리포트', att: '출결 즉시 알림', late: '지각 즉시 알림', hw5: '숙제 누적 5회 알림', growth: '성장 리포트 (2주)', growth1: '성장 리포트 (1주)', daily_photo: '일간 리포트 (사진·영상 있는 날)' };
 /** 쿠션형 없이 기본형만 쓰는 종류 */
 export const BASIC_ONLY_KINDS = ['late', 'hw5', 'growth', 'daily_photo'];
 

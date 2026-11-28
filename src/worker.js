@@ -136,7 +136,7 @@ export async function runSchedule(env, nowMs = Date.now()) {
   // 올린 학습 결과물 사진: AI 코멘트가 아직 없는 것 몇 장씩
   try { await processWorks(env, 3); } catch (e) { console.error('works', e); }
   const refs = await processQueue(env, { settings });
-  for (const ref of refs) await generate(env, 'growth', ref, { settings });
+  for (const r of refs) await generate(env, r.kind, r.ref, { settings });
   const gdiff = mins - hmToMin(g.send);
   if (!manual && isGrowthDay && g.auto && gdiff >= 0 && gdiff < 120 && await claimJob(env, 'growth-send', now.date)) {
     await sendMessages(env, await idsToSend(env, 'growth', now.date), { auto: true });

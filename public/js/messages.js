@@ -3,7 +3,7 @@
 import { h, api, icon, toast, outbox, saveLabel, kstToday, addDays, dateLabel, hmOf, confirmBox, debounce, sheet, copyText, dowOf } from './core.js';
 import { S, setDate, courseTabs } from './state.js';
 
-const KINDS = [['daily', '일간'], ['missing', '미제출'], ['hw5', '숙제 5회'], ['growth', '성장 리포트'], ['weekly', '주간'], ['monthly', '월간'], ['sent', '보낸 내역']];
+const KINDS = [['daily', '일간'], ['missing', '미제출'], ['hw5', '숙제 5회'], ['growth', '성장 리포트'], ['growth1', '성장 1주'], ['weekly', '주간'], ['monthly', '월간'], ['sent', '보낸 내역']];
 const manual = () => !S.meta.send_policy || S.meta.send_policy.director_only !== false;
 const canSend = () => !manual() || S.me.role === 'director';
 const saturdayOf = (d) => { const w = dowOf(d); return w === 0 ? addDays(d, -1) : addDays(d, 6 - w); };
@@ -21,7 +21,7 @@ function growthRef(d) {
 
 export async function renderMessages(main) {
   let kind = sessionStorage.getItem('cm_msg_kind') || 'daily';
-  let ref = kind === 'monthly' ? (sessionStorage.getItem('cm_msg_month') || kstToday().slice(0, 7)) : kind === 'growth' ? growthRef(S.date) : S.date;
+  let ref = kind === 'monthly' ? (sessionStorage.getItem('cm_msg_month') || kstToday().slice(0, 7)) : kind === 'growth' ? growthRef(S.date) : kind === 'growth1' ? saturdayOf(S.date) : S.date;
   let data = null;
   const checks = {}; // 이번 화면에서 바꾼 체크 상태 (자동 저장)
   let sending = false;
@@ -53,12 +53,13 @@ export async function renderMessages(main) {
   if (kind === 'weekly') info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } },
     `주간 리포트는 기준일이 속한 주 월요일부터 ${sch.weekly_exclude_today ? '기준일 전날' : '기준일'}까지를 모아요. 처음엔 모두 체크 해제 상태예요 — 보낼 학생만 체크해서 보내 주세요.`));
   if (kind === 'monthly') info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } }, '월간 리포트는 그 달 1일부터 말일까지를 모아요. 보낼 학생만 체크해서 보내 주세요.'));
-  if (kind === 'growth') {
+  if (kind === 'growth' || kind === 'growth1') {
     const g = S.meta.growth || {};
-    const two = Number(g.weeks) !== 1;
+    const two = kind === 'growth' && Number(g.weeks) !== 1;
     info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } },
       `${addDays(ref, two ? -12 : -5).slice(5).replace('-', '/')}(월) ~ ${addDays(ref, -1).slice(5).replace('-', '/')}(금) ${two ? '2주' : '한 주'} 기록으로 만든 리포트예요. `,
-      `${two ? '2주마다' : '매주'} ${'일월화수목금토'[g.day ?? 6]}요일 ${g.gen || '07:00'}부터 AI가 몇 명씩 써요. 내용을 확인하고 "승인"을 체크하면 `,
+      kind === 'growth1' ? '1주 리포트는 자동으로 만들지 않고, 필요할 때 "지금 리포트 만들기"(또는 "AI로 지금 쓰기")로 만들어요. 2주 리포트와 따로 보관돼요. 내용을 확인하고 "승인"을 체크하면 '
+        : `${two ? '2주마다' : '매주'} ${'일월화수목금토'[g.day ?? 6]}요일 ${g.gen || '07:00'}부터 AI가 몇 명씩 써요. 내용을 확인하고 "승인"을 체크하면 `,
       !manual() && g.auto ? `${g.send || '12:00'}에 승인된 리포트만 자동으로 보내요.` : '원장님이 확인하고 "지금 보내기"를 누르면 보내져요.'));
   }
   if (kind === 'hw5') info.append(h('div', { class: 'note small', style: { marginBottom: '10px' } },
@@ -99,9 +100,9 @@ export async function renderMessages(main) {
       kind !== 'monthly' ? h('span', { class: 'small muted' }, dateLabel(ref)) : null);
     drawBar();
     if (!data.generated && !data.list.length) {
-      const when = kind === 'growth' ? `${Number((S.meta.growth || {}).weeks) !== 1 ? '2주마다' : '매주'} ${'일월화수목금토'[(S.meta.growth || {}).day ?? 6]}요일 ${(S.meta.growth || {}).gen || '07:00'}에 자동으로 만들어져요.` : kind === 'daily' || kind === 'missing' || kind === 'hw5' ? `매일 ${sch.preview}에 자동으로 만들어져요.` : kind === 'weekly' ? `매주 ${'일월화수목금토'[sch.weekly_day]}요일 ${sch.preview}에 자동으로 만들어져요.` : `매달 말일 ${sch.preview}에 자동으로 만들어져요.`;
+      const when = kind === 'growth1' ? '1주 성장 리포트는 자동으로 만들지 않아요. 아래 버튼을 누르면 이번 주 기록으로 만들어요.' : kind === 'growth' ? `${Number((S.meta.growth || {}).weeks) !== 1 ? '2주마다' : '매주'} ${'일월화수목금토'[(S.meta.growth || {}).day ?? 6]}요일 ${(S.meta.growth || {}).gen || '07:00'}에 자동으로 만들어져요.` : kind === 'daily' || kind === 'missing' || kind === 'hw5' ? `매일 ${sch.preview}에 자동으로 만들어져요.` : kind === 'weekly' ? `매주 ${'일월화수목금토'[sch.weekly_day]}요일 ${sch.preview}에 자동으로 만들어져요.` : `매달 말일 ${sch.preview}에 자동으로 만들어져요.`;
       list.replaceChildren(h('div', { class: 'card empty' }, h('b', null, '아직 미리보기가 없어요'), h('div', null, when),
-        h('button', { class: 'btn primary mt', onclick: async (e) => { e.target.disabled = true; await outbox.flushAll(); await api('/api/messages/generate', { kind, ref }); if (kind === 'growth') return runAi(e.target); load(); } }, kind === 'growth' ? '지금 리포트 만들기' : '지금 미리보기 만들기')));
+        h('button', { class: 'btn primary mt', onclick: async (e) => { e.target.disabled = true; await outbox.flushAll(); await api('/api/messages/generate', { kind, ref }); if (kind === 'growth' || kind === 'growth1') return runAi(e.target); load(); } }, kind === 'growth' || kind === 'growth1' ? '지금 리포트 만들기' : '지금 미리보기 만들기')));
       return;
     }
     if (!v.length) { list.replaceChildren(h('div', { class: 'card empty' }, h('b', null, kind === 'missing' ? '미제출 학생이 없어요' : kind === 'hw5' ? '오늘 숙제 5회 누적 학생이 없어요' : '보낼 메시지가 없어요'))); return; }
@@ -119,7 +120,7 @@ export async function renderMessages(main) {
     const canCheck = v.filter((m) => !m.checked && !m.locked && m.status !== 'sent');
     const canUncheck = v.filter((m) => m.checked);
     const n = checkedList().length;
-    const G = kind === 'growth';
+    const G = kind === 'growth' || kind === 'growth1';
     const queued = G ? v.filter((m) => m.report_status === 'queued').length : 0;
     bar.replaceChildren(
       h('button', { class: 'btn small', disabled: !canCheck.length, onclick: () => bulk(canCheck, 1) }, G ? '모두 승인' : '모두 체크'),
@@ -129,7 +130,7 @@ export async function renderMessages(main) {
         e.target.disabled = true; await outbox.flushAll(); await api('/api/messages/generate', { kind, ref }); toast('최신 수업 기록으로 다시 만들었어요'); load();
       } }, '미리보기 다시 만들기') : null,
       canSend()
-        ? h('button', { class: 'btn primary', style: { marginLeft: 'auto' }, disabled: !n || sending, onclick: sendChecked }, sending ? '보내는 중…' : kind === 'growth' ? `승인된 ${n}건 지금 보내기` : `체크된 ${n}건 지금 보내기`)
+        ? h('button', { class: 'btn primary', style: { marginLeft: 'auto' }, disabled: !n || sending, onclick: sendChecked }, sending ? '보내는 중…' : kind === 'growth' || kind === 'growth1' ? `승인된 ${n}건 지금 보내기` : `체크된 ${n}건 지금 보내기`)
         : h('span', { class: 'small muted', style: { marginLeft: 'auto' } }, `체크 ${n}건 · 원장님이 확인 후 보내요`));
   }
 
@@ -187,7 +188,7 @@ export async function renderMessages(main) {
     const st = m.status === 'sent' ? h('span', { class: 'chip ok' }, `✓ 전송됨 ${hmOf(m.sent_at)}${m.channel ? ' · ' + m.channel : ''}`)
       : m.status === 'failed' ? h('span', { class: 'chip bad' }, '✕ 실패')
         : m.status === 'sending' ? h('span', { class: 'chip warn' }, '보내는 중') : null;
-    if (kind === 'growth') return growthCard(m, cb, st);
+    if (kind === 'growth' || kind === 'growth1') return growthCard(m, cb, st);
     if (data.kakaoOnly) return kakaoCard(m, cb, st);
     const kakaoBox = m.kakaoPreview ? h('pre', { class: 'note small hidden', style: { whiteSpace: 'pre-wrap', margin: '8px 0 0', fontFamily: 'inherit' } }, m.kakaoPreview) : null;
     const el = h('section', { class: 'card msg' + (m.status === 'sent' ? ' sent' : '') + (m.locked ? ' locked' : '') },
@@ -214,7 +215,7 @@ export async function renderMessages(main) {
     if (btn) btn.disabled = true;
     let left = 1, guard = 0;
     while (left > 0 && guard++ < 60) {
-      try { const r = await api('/api/report/process', { ref }); left = r.left; if (btn) btn.textContent = left ? `AI가 쓰는 중… (${left}명 남음)` : '다 썼어요'; }
+      try { const r = await api('/api/report/process', { ref, kind }); left = r.left; if (btn) btn.textContent = left ? `AI가 쓰는 중… (${left}명 남음)` : '다 썼어요'; }
       catch (e) { toast(e.message, true); break; }
     }
     load();

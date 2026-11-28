@@ -11,7 +11,7 @@ import { renderTemplate, checkKakaoFields, kakaoVariables, kakaoFieldText } from
 import { RECOMMENDED_KAKAO, DEFAULT_SMS, KIND_LABELS, CUSHION_LABELS, BASIC_ONLY_KINDS } from './defaults.js';
 import { worksList, workRow, workUpload, workUpdate, workDelete, workImage, workAnalyze, worksForReport, WORK_TYPES } from './works.js';
 import { mediaStart, mediaPart, mediaComplete, mediaDelete, mediaList, r2Ready } from './media.js';
-import { evalDay, saveEvalMarks, saveDayNote, saveEvalDayItems, processQueue, contentOf, cleanContent, ruleWrite, reportHtml, reportText, growthSettings, periodFor, polishComment, NOTE_FIELDS, EVAL_MARKS } from './growth.js';
+import { evalDay, saveEvalMarks, saveDayNote, saveEvalDayItems, processQueue, contentOf, cleanContent, ruleWrite, reportHtml, reportText, growthSettings, periodFor, polishComment, NOTE_FIELDS, EVAL_MARKS, oneWeek, REPORT_KIND, MSG_KIND } from './growth.js';
 
 const SESSION_DAYS = 60;
 
@@ -325,6 +325,7 @@ async function listMessages(env, me, url) {
   const kind = url.searchParams.get('kind') || 'daily';
   let ref = url.searchParams.get('ref') || kstNow().date;
   if (kind === 'growth') ref = periodFor(await getSettings(env), ref).ref;
+  if (kind === 'growth1') ref = periodFor(oneWeek(await getSettings(env)), ref).ref;
   const exists = await first(env, 'SELECT id FROM messages WHERE kind = ? AND ref = ? LIMIT 1', kind, ref);
   if (exists) await generate(env, kind, ref); // 열 때마다 가장 최근 수업 기록으로 다시 맞추기
   const vis = await visibleStudentIds(env, me);
@@ -353,8 +354,8 @@ async function listMessages(env, me, url) {
       kakaoPreview: item.kakao ? renderTemplate((settings.kakao.templates || []).find((t) => t.templateId === item.kakao.templateId)?.text || '', vars, 'kakao') : '',
     };
   });
-  if (kind === 'growth') {
-    const reps = await all(env, "SELECT id, student_id, status, source, error, edited, viewed_at FROM reports WHERE kind = 'weekly' AND ref = ?", ref);
+  if (kind === 'growth' || kind === 'growth1') {
+    const reps = await all(env, 'SELECT id, student_id, status, source, error, edited, viewed_at FROM reports WHERE kind = ? AND ref = ?', REPORT_KIND[kind], ref);
     const rMap = new Map(reps.map((r) => [r.student_id, r]));
     for (const m of list) { const r = rMap.get(m.student_id); if (r) Object.assign(m, { report_id: r.id, report_status: r.status, report_source: r.source, report_error: r.error, report_edited: !!r.edited, report_viewed: r.viewed_at }); }
   }
@@ -414,15 +415,17 @@ async function reportRegenerate(env, me, body) {
   const r = await reportRow(env, me, body.id);
   await run(env, "UPDATE reports SET edited = NULL, status = 'queued', tries = 0 WHERE id = ?", r.id);
   await processQueue(env, { id: r.id });
-  await generate(env, 'growth', r.ref);
+  await generate(env, MSG_KIND[r.kind] || 'growth', r.ref);
   return { ok: true };
 }
 async function reportProcess(env, body) {
-  const ref = periodFor(await getSettings(env), String(body.ref || kstNow().date)).ref;
-  await generate(env, 'growth', ref);
+  const kind = body.kind === 'growth1' ? 'growth1' : 'growth';
+  const settings = await getSettings(env);
+  const ref = periodFor(kind === 'growth1' ? oneWeek(settings) : settings, String(body.ref || kstNow().date)).ref;
+  await generate(env, kind, ref);
   const done = await processQueue(env, { limit: 2 });
-  if (done.length) await generate(env, 'growth', ref);
-  const left = await first(env, "SELECT COUNT(*) AS n FROM reports WHERE kind = 'weekly' AND ref = ? AND status = 'queued'", ref);
+  for (const d of done) await generate(env, d.kind, d.ref);
+  const left = await first(env, "SELECT COUNT(*) AS n FROM reports WHERE kind = ? AND ref = ? AND status = 'queued'", REPORT_KIND[kind], ref);
   return { ok: true, left: left ? left.n : 0 };
 }
 

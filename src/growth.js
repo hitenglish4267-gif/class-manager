@@ -70,6 +70,10 @@ export function periodFor(settings, ref) {
   return { ref: sat, from: addDays(sat, 2 - 7 * weeks), to: addDays(sat, -1), weeks };
 }
 export function weekOf(ref, settings) { return periodFor(settings, ref); }
+/** 1주 성장 리포트 (2주 리포트와 따로, 원할 때 만들어 보기) */
+export function oneWeek(settings) { return { ...settings, growth: { ...growthSettings(settings), weeks: 1 } }; }
+export const REPORT_KIND = { growth: 'weekly', growth1: 'week1' };
+export const MSG_KIND = { weekly: 'growth', week1: 'growth1' };
 const unitWord = (w) => (w === 2 ? '2주' : '한 주');
 const prevWord = (w) => (w === 2 ? '지난 2주' : '지난주');
 
@@ -242,7 +246,7 @@ function hasData(f) {
 }
 
 /** 리포트 행을 만들거나 사실만 최신으로 (AI 문장은 그대로) */
-export async function ensureReports(env, settings, ref) {
+export async function ensureReports(env, settings, ref, rkind = 'weekly') {
   const w = periodFor(settings, ref);
   const prevW = { from: addDays(w.from, -7 * w.weeks), to: addDays(w.to, -7 * w.weeks) };
   const [cur, prev] = await Promise.all([rangeData(env, w.from, w.to), rangeData(env, prevW.from, prevW.to)]);
@@ -251,7 +255,7 @@ export async function ensureReports(env, settings, ref) {
   for (const l of cur.logs.values()) l.book = curNames.get(l.curriculum_id) || '';
   const students = await all(env, `SELECT s.*, c.name AS class_name, c.type AS class_type, t.name AS teacher_name FROM students s
     LEFT JOIN classes c ON c.id = s.class_id LEFT JOIN teachers t ON t.id = c.teacher_id WHERE s.deleted = 0`);
-  const existing = new Map((await all(env, "SELECT * FROM reports WHERE kind = 'weekly' AND ref = ?", w.ref)).map((r) => [r.student_id, r]));
+  const existing = new Map((await all(env, 'SELECT * FROM reports WHERE kind = ? AND ref = ?', rkind, w.ref)).map((r) => [r.student_id, r]));
   const now = kstNow().stamp;
   const stmts = [];
   for (const s of students) {
@@ -261,7 +265,7 @@ export async function ensureReports(env, settings, ref) {
     const fj = JSON.stringify(facts);
     if (!ex) {
       stmts.push(env.DB.prepare(`INSERT INTO reports (kind, ref, student_id, token, facts, status, tries, created_at, updated_at)
-        VALUES ('weekly', ?, ?, ?, ?, 'queued', 0, ?, ?) ON CONFLICT(kind, ref, student_id) DO NOTHING`).bind(w.ref, s.id, randomToken(24), fj, now, now));
+        VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?) ON CONFLICT(kind, ref, student_id) DO NOTHING`).bind(rkind, w.ref, s.id, randomToken(24), fj, now, now));
     } else if (ex.facts !== fj) {
       stmts.push(env.DB.prepare('UPDATE reports SET facts = ?, updated_at = ? WHERE id = ?').bind(fj, now, ex.id));
     }
@@ -517,9 +521,10 @@ export async function processQueue(env, opts = {}) {
         await run(env, 'UPDATE reports SET error = ?, tries = ?, updated_at = ? WHERE id = ?', String(e.message || e).slice(0, 300), tries, stamp, r.id);
       }
     }
-    refs.add(r.ref);
+    refs.add(`${MSG_KIND[r.kind] || 'growth'}|${r.ref}`);
   }
-  return [...refs];
+  // [{ kind: 'growth' | 'growth1', ref }]
+  return [...refs].map((x) => { const [kind, ref] = x.split('|'); return { kind, ref }; });
 }
 
 // ───────── 반복 문구 걸러내기 · 근거 없는 칸 비우기 ─────────
