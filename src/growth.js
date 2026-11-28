@@ -72,10 +72,50 @@ export function periodFor(settings, ref) {
 export function weekOf(ref, settings) { return periodFor(settings, ref); }
 /** 1주 성장 리포트 (2주 리포트와 따로, 원할 때 만들어 보기) */
 export function oneWeek(settings) { return { ...settings, growth: { ...growthSettings(settings), weeks: 1 } }; }
-export const REPORT_KIND = { growth: 'weekly', growth1: 'week1' };
-export const MSG_KIND = { weekly: 'growth', week1: 'growth1' };
-const unitWord = (w) => (w === 2 ? '2주' : '한 주');
-const prevWord = (w) => (w === 2 ? '지난 2주' : '지난주');
+export const REPORT_KIND = { growth: 'weekly', growth1: 'week1', growth_m: 'month', growth_q: 'quarter', consult: 'consult' };
+export const MSG_KIND = { weekly: 'growth', week1: 'growth1', month: 'growth_m', quarter: 'growth_q' }; // consult는 메시지 없이 리포트만
+
+const lastDay = (ym) => { const [y, m] = ym.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); };
+const prevMonth = (ym) => { const [y, m] = ym.split('-').map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`; };
+/** 리포트 종류별 기간: ref(기준), from~to(이번 기간), prevFrom~prevTo(비교할 지난 기간) */
+export function periodOfKind(settings, rkind, ref) {
+  const r = String(ref || kstNow().date);
+  if (rkind === 'month') {
+    const ym = /^\d{4}-\d{2}/.test(r) ? r.slice(0, 7) : kstNow().date.slice(0, 7);
+    const pm = prevMonth(ym);
+    return { ref: ym, from: `${ym}-01`, to: lastDay(ym), prevFrom: `${pm}-01`, prevTo: lastDay(pm), weeks: 4, unit: 'month' };
+  }
+  if (rkind === 'quarter') {
+    let y, q;
+    const m1 = r.match(/^(\d{4})-Q([1-4])$/);
+    if (m1) { y = Number(m1[1]); q = Number(m1[2]); } else { y = Number(r.slice(0, 4)); q = Math.floor((Number(r.slice(5, 7)) - 1) / 3) + 1; }
+    const sm = (q - 1) * 3 + 1;
+    const ym = (mm) => `${y}-${String(mm).padStart(2, '0')}`;
+    const py = q === 1 ? y - 1 : y, pq = q === 1 ? 4 : q - 1, psm = (pq - 1) * 3 + 1;
+    const pym = (mm) => `${py}-${String(mm).padStart(2, '0')}`;
+    return { ref: `${y}-Q${q}`, from: `${ym(sm)}-01`, to: lastDay(ym(sm + 2)), prevFrom: `${pym(psm)}-01`, prevTo: lastDay(pym(psm + 2)), weeks: 13, unit: 'quarter' };
+  }
+  if (rkind === 'consult') {
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(r) ? r : kstNow().date;
+    return { ref: d, from: addDays(d, -89), to: d, prevFrom: addDays(d, -179), prevTo: addDays(d, -90), weeks: 13, unit: 'consult' };
+  }
+  const p = periodFor(rkind === 'week1' ? oneWeek(settings) : settings, r);
+  return { ...p, prevFrom: addDays(p.from, -7 * p.weeks), prevTo: addDays(p.to, -7 * p.weeks), unit: p.weeks === 2 ? 'w2' : 'w1' };
+}
+// 기간별 말 (2주·1주·월간·분기·상담)
+const LABELS = {
+  w2: { span: '2주', prev: '지난 2주', cur: '이번 2주', next: '다음 2주', title: 'BI-WEEKLY GROWTH REPORT', subt: '2주', name: '2주 성장 리포트' },
+  w1: { span: '한 주', prev: '지난주', cur: '이번 주', next: '다음 주', title: 'WEEKLY GROWTH REPORT', subt: '일주일', name: '주간 성장 리포트' },
+  month: { span: '한 달', prev: '지난달', cur: '이번 달', next: '다음 달', title: 'MONTHLY GROWTH REPORT', subt: '한 달', name: '월간 성장 리포트' },
+  quarter: { span: '3개월', prev: '지난 분기', cur: '이번 분기', next: '다음 분기', title: 'QUARTERLY GROWTH REPORT', subt: '3개월', name: '분기 성장 리포트' },
+  consult: { span: '최근 3개월', prev: '그 전 3개월', cur: '최근 3개월', next: '앞으로', title: 'CONSULTATION REPORT', subt: '최근 3개월', name: '상담용 리포트' },
+};
+export function labelsOf(p) {
+  if (p && typeof p === 'object') return LABELS[p.unit] || (Number(p.weeks) === 2 ? LABELS.w2 : LABELS.w1);
+  return Number(p) === 2 ? LABELS.w2 : LABELS.w1;
+}
+const unitWord = (w) => labelsOf(w).span;
+const prevWord = (w) => labelsOf(w).prev;
 
 // ───────── 한 주 사실 모으기 ─────────
 function targetFor(classType, classId, studentId) { return classType === 'individual' ? `s${studentId}` : `c${classId}`; }
@@ -225,7 +265,7 @@ export function buildFacts(settings, s, cur, prev, period) {
 
   return {
     student: s.name, class_name: s.class_name || '', teacher: s.teacher_name || '',
-    period: { from: period.from, to: period.to, weeks: period.weeks || 1, label: `${dateShort(period.from)} ~ ${dateShort(period.to)}` },
+    period: { from: period.from, to: period.to, weeks: period.weeks || 1, unit: period.unit || (period.weeks === 2 ? 'w2' : 'w1'), label: `${period.from.slice(0, 4) !== period.to.slice(0, 4) ? period.from.slice(2, 4) + '.' : ''}${dateShort(period.from)} ~ ${dateShort(period.to)}` },
     attendance: { present: cnt.present, late: cnt.late, absent: cnt.absent },
     books: [...new Set(progress.map((p) => p.book).filter(Boolean))],
     progress, next_plan: nextPlan,
@@ -249,9 +289,9 @@ function hasData(f) {
 }
 
 /** 리포트 행을 만들거나 사실만 최신으로 (AI 문장은 그대로) */
-export async function ensureReports(env, settings, ref, rkind = 'weekly') {
-  const w = periodFor(settings, ref);
-  const prevW = { from: addDays(w.from, -7 * w.weeks), to: addDays(w.to, -7 * w.weeks) };
+export async function ensureReports(env, settings, ref, rkind = 'weekly', opts = {}) {
+  const w = periodOfKind(settings, rkind, ref);
+  const prevW = { from: w.prevFrom, to: w.prevTo };
   const [cur, prev, hist] = await Promise.all([rangeData(env, w.from, w.to), rangeData(env, prevW.from, prevW.to),
     all(env, 'SELECT student_id, date, kind, correct, total FROM tests WHERE date >= ? AND date <= ? AND correct IS NOT NULL AND total > 0 ORDER BY date', addDays(w.to, -180), w.to)]);
   cur.history = new Map();
@@ -265,6 +305,7 @@ export async function ensureReports(env, settings, ref, rkind = 'weekly') {
   const now = kstNow().stamp;
   const stmts = [];
   for (const s of students) {
+    if (opts.studentId && s.id !== Number(opts.studentId)) continue;
     const facts = buildFacts(settings, s, cur, prev, w);
     const ex = existing.get(s.id);
     if (!hasData(facts)) continue;
@@ -281,8 +322,8 @@ export async function ensureReports(env, settings, ref, rkind = 'weekly') {
 }
 
 // ───────── AI로 문장 쓰기 ─────────
-const SECTION_KEYS = ['overview', 'skills', 'concepts', 'strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'goals', 'next_week', 'home_tips', 'teacher_comment'];
-const LIST_KEYS = new Set(['skills', 'strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'goals', 'home_tips']);
+const SECTION_KEYS = ['overview', 'skills', 'concepts', 'strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'goals', 'next_week', 'home_tips', 'consult_points', 'teacher_comment'];
+const LIST_KEYS = new Set(['skills', 'strengths', 'growth', 'practice', 'weak_concepts', 'academy_done', 'academy_plan', 'goals', 'home_tips', 'consult_points']);
 export const SKILL_AREAS = ['어휘', '읽기', '쓰기', '문법', '말하기·듣기', '학습 습관'];
 export const SKILL_LEVELS = ['도입', '발전', '안정', '심화'];
 
@@ -343,6 +384,11 @@ const SYSTEM = `당신은 15년 넘게 초등·중등 아이들을 가르쳐 온
 - 진단은 2~3문장: 근거(평가 횟수·점수·날짜) → 이 단계의 의미(무엇을 할 수 있고 무엇이 다음 단계인지). 구체 사례는 strengths·practice에 쓰고 여기서는 영역 수준의 종합 진단만 합니다.
 - 예: "어휘|안정|이번 기간 Voca 시험 네 번이 모두 90% 이상이었고 단어 암기에서 '매우 잘함'이 세 번 있었어요. 배운 단어를 정확히 기억하는 단계라, 다음에는 문장 속에서 바르게 쓰는 단계로 넓혀 갈 거예요."
 
+[상담 때 나눌 이야기 — consult_points]
+- 기록 요약의 "리포트 종류"가 상담용일 때만 3~5개 씁니다. 그 밖의 리포트에서는 []로 둡니다.
+- 상담 때 학부모님과 함께 이야기 나누면 좋은 주제를 씁니다: 지금 수준과 다음 목표, 가정 학습 습관(숙제·단어 암기), 진도·교재 방향, 학부모님께 여쭤보고 싶은 점(집에서의 모습 등).
+- 항목마다 1~2문장, 기록 근거와 함께.
+
 [다음 기간 학습 목표 — goals]
 - 2~3개. 다음 기간이 끝났을 때 확인할 수 있는 구체적인 목표로 씁니다(숫자·횟수·항목 이름). 기록에 근거한 목표만 씁니다.
 - 예: "Voca 시험 평균 85% 이상 유지하기", "구문 분석에서 '잘함' 2회 이상 받기", "숙제 완료율 90% 이상"
@@ -360,7 +406,7 @@ const SYSTEM = `당신은 15년 넘게 초등·중등 아이들을 가르쳐 온
 "practice":["구문 분석(문장을 주어·동사 덩어리로 나눠 보는 연습)은 11/19에 아직 헷갈려했어요. 문장이 길어지면 동사를 먼저 찾는 게 조금 어려운가 봐요. 수업 시작할 때마다 5분씩 짧은 문장 3개로 같이 연습하고, 다음 리포트에서 어떻게 달라졌는지 꼭 알려 드릴게요."]}
 
 출력은 설명 없이 아래 형식의 JSON 하나만 씁니다:
-{"overview":"","skills":[],"concepts":"","strengths":[],"growth":[],"practice":[],"weak_concepts":[],"academy_done":[],"academy_plan":[],"goals":[],"next_week":"","home_tips":[],"teacher_comment":""}`;
+{"overview":"","skills":[],"concepts":"","strengths":[],"growth":[],"practice":[],"weak_concepts":[],"academy_done":[],"academy_plan":[],"goals":[],"next_week":"","home_tips":[],"consult_points":[],"teacher_comment":""}`;
 
 const POLISH = `당신은 영어학원 원장입니다. 아래 "초안"은 학부모님께 보낼 성장 리포트 문장이고, "기록 요약"은 근거 자료입니다.
 [말투 — 매우 중요: AI가 쓴 티가 나지 않게]
@@ -393,14 +439,21 @@ export function callName(name) {
 
 /** AI에게 줄 기록 요약 (JSON 대신 한국어 문장 — 더 자연스럽고 정확하게 써요) */
 export function briefFor(f) {
-  const w = f.period?.weeks || 1;
+  const w = f.period || 1;
   const L = [];
   const add = (t) => { if (t) L.push(t); };
   add(`학생: ${f.student}${f.class_name ? ` (${f.class_name})` : ''}${f.teacher ? `, 담당 ${f.teacher} 선생님` : ''} / 부르는 이름: ${callName(f.student)}`);
+  add(`리포트 종류: ${labelsOf(w).name}${f.period?.unit === 'consult' ? ' (상담 때 학부모님과 함께 보며 이야기 나눌 리포트 — consult_points를 꼭 씁니다)' : ''}`);
   add(`리포트 기간: ${f.period.label} (${unitWord(w)})${f.books?.length ? `, 교재: ${f.books.join(', ')}` : ''}`);
   const a = f.attendance || {};
   add(`출결: 출석 ${a.present || 0}회, 지각 ${a.late || 0}회, 결석 ${a.absent || 0}회`);
-  if (f.progress?.length) {
+  if (f.progress?.length > 24) {
+    // 한 달·분기처럼 기간이 길면 교재별로 처음~마지막만 (AI가 길게 읽지 않게)
+    add(`진도 요약 (수업 ${f.progress.length}회):`);
+    const byBook = new Map();
+    for (const p of f.progress) { const b = p.book || '수업'; if (!byBook.has(b)) byBook.set(b, []); byBook.get(b).push(p); }
+    for (const [b, arr] of byBook) add(`- ${b}: ${dateShort(arr[0].date)} ${String(arr[0].done).split(' · ')[0]} → ${dateShort(arr[arr.length - 1].date)} ${String(arr[arr.length - 1].done).split(' · ')[0]} (${arr.length}회)`);
+  } else if (f.progress?.length) {
     add('진도 (날짜: 실제 완료 / 계획):');
     for (const p of f.progress) add(`- ${dateShort(p.date)}: ${p.done}${p.changed ? ` (계획은 ${p.planned})` : ''}${p.homework ? ` / 숙제: ${p.homework}` : ''}`);
   }
@@ -418,7 +471,7 @@ export function briefFor(f) {
     add('수업 중 학습 평가 (항목: 날짜별 평가 / 지난 기간과 비교):');
     for (const ar of f.areas) {
       const hint = TERM_HINTS[ar.name] ? ` [${ar.name} = ${TERM_HINTS[ar.name]}]` : '';
-      add(`- ${ar.name}${ar.group === 'attitude' ? '(학습 태도)' : ''}: ${(ar.timeline || ar.marks).join(', ')}${ar.trend ? ` / 추세 ${ar.trend}` : ''}${ar.prev ? ` / ${prevWord(w)}: ${ar.prev}` : ''}${hint}`);
+      add(`- ${ar.name}${ar.group === 'attitude' ? '(학습 태도)' : ''}: ${(ar.timeline && ar.timeline.length <= 10 ? ar.timeline : ar.marks).join(', ')}${ar.trend ? ` / 추세 ${ar.trend}` : ''}${ar.prev ? ` / ${prevWord(w)}: ${ar.prev}` : ''}${hint}`);
     }
   }
   const n = f.notes || {};
@@ -549,6 +602,7 @@ const FIELD_GUIDE = {
   goals: '다음 기간 학습 목표: 항목마다 한 줄, 숫자·횟수로 확인할 수 있게',
   next_week: '다음 기간 학습 예정: 2문장',
   home_tips: '가정에서 도와주시면 좋은 부분: 항목마다 하루 5~10분 안에 할 수 있는 구체적인 행동',
+  consult_points: '상담 때 함께 이야기 나눌 주제: 항목마다 1~2문장',
   teacher_comment: '선생님의 특별 코멘트: 3~4문장',
 };
 const MEMO_SYSTEM = `당신은 15년 넘게 아이들을 가르쳐 온 영어학원 원장입니다. 원장님이 성장 리포트의 칸에 짧게 적은 메모를, 학부모님께 드리는 자연스럽고 전문적인 문장으로 고쳐 씁니다.
@@ -612,7 +666,7 @@ export async function polishAll(env, settings, facts, content, base) {
 
 /** AI를 못 쓸 때: 기록만으로 정리 (지어내지 않고, 기록을 날짜·평가와 함께 문장으로 옮기기만) */
 export function ruleWrite(f) {
-  const w = f.period?.weeks || 1;
+  const w = f.period || 1;
   const j = (arr) => (arr || []).map((x) => `${dateShort(x.date)} ${x.text}`).filter(Boolean);
   const byCat = (marks) => (f.areas || []).filter((a) => (a.timeline || []).some((t) => marks.some((m) => t.includes(m))));
   const tl = (a, marks) => (a.timeline || []).filter((t) => marks.some((m) => t.includes(m))).join(', ');
@@ -663,7 +717,7 @@ export async function processQueue(env, opts = {}) {
         await run(env, 'UPDATE reports SET error = ?, tries = ?, updated_at = ? WHERE id = ?', String(e.message || e).slice(0, 300), tries, stamp, r.id);
       }
     }
-    refs.add(`${MSG_KIND[r.kind] || 'growth'}|${r.ref}`);
+    if (MSG_KIND[r.kind]) refs.add(`${MSG_KIND[r.kind]}|${r.ref}`);
   }
   // [{ kind: 'growth' | 'growth1', ref }]
   return [...refs].map((x) => { const [kind, ref] = x.split('|'); return { kind, ref }; });
@@ -681,6 +735,14 @@ export function refineContent(c, f) {
   if (!c || !f) return c;
   const n = f.notes || {};
   const out = { ...c };
+  if (f.period && f.period.unit !== 'consult') out.consult_points = [];
+  // 성은 빼고 이름으로 (김예나는 → 예나는)
+  const full = String(f.student || '').trim();
+  if (/^[가-힣]{3,4}$/.test(full)) {
+    const given = full.slice(1);
+    const fix = (t) => String(t).split(full).join(given);
+    for (const k of Object.keys(out)) out[k] = Array.isArray(out[k]) ? out[k].map(fix) : typeof out[k] === 'string' ? fix(out[k]) : out[k];
+  }
   // 칸은 그대로 두고, 같은·비슷한 문장이 다시 나오면 지워요 (다음 진도 이야기는 "다음 학습 예정" 칸을 먼저 살려요)
   const seen = [];
   const keep = (sent) => {
@@ -727,10 +789,10 @@ export function growthVars(settings, baseUrl, r, facts) {
 export function reportText(settings, facts, c) {
   const L = [];
   const sec = (t, body) => { const b = Array.isArray(body) ? body.filter(Boolean).map((x) => `- ${x}`).join('\n') : String(body || '').trim(); if (b) L.push(`■ ${t}\n${b}`); };
-  const W = facts.period?.weeks || 1;
-  L.push(`[${settings.academy || '학원'}] ${W === 2 ? '2주' : '주간'} 성장 리포트`, `${facts.student} · ${facts.period.label}`);
-  sec(`이번 ${W === 2 ? '2주' : '주'} 학습 진도`, [...(facts.progress || []).map((p) => `${dateShort(p.date)} ${p.done}`), c.concepts]);
-  sec(`이번 ${W === 2 ? '2주' : '주'} 시험 결과`, (facts.tests || []).map((t) => `${dateShort(t.date)} ${t.kind} ${t.score}${t.result ? ` (${t.result})` : ''}`));
+  const W = facts.period || 1;
+  L.push(`[${settings.academy || '학원'}] ${labelsOf(W).name}`, `${facts.student} · ${facts.period.label}`);
+  sec(`${labelsOf(W).cur} 학습 진도`, [...(facts.progress || []).map((p) => `${dateShort(p.date)} ${p.done}`), c.concepts]);
+  sec(`${labelsOf(W).cur} 시험 결과`, (facts.tests || []).map((t) => `${dateShort(t.date)} ${t.kind} ${t.score}${t.result ? ` (${t.result})` : ''}`));
   sec('학습 성취도', c.overview);
   sec('영역별 학습 진단', (c.skills || []).map((x) => { const p = String(x).split('|'); return p.length >= 3 ? `${p[0]} (${p[1]} 단계): ${p.slice(2).join(' ')}` : x; }));
   sec('잘하고 있는 부분', c.strengths);
@@ -739,9 +801,10 @@ export function reportText(settings, facts, c) {
   sec('어려워하는 학습 개념', c.weak_concepts);
   sec('학원에서 지도한 내용', c.academy_done);
   sec('학원에서 추가로 지도할 부분', c.academy_plan);
-  sec(`다음 ${W === 2 ? '2주' : '주'} 학습 목표`, c.goals);
-  sec(`다음 ${W === 2 ? '2주' : '주'} 학습 예정`, c.next_week);
+  sec(`${labelsOf(W).next} 학습 목표`, c.goals);
+  sec(`${labelsOf(W).next} 학습 예정`, c.next_week);
   sec('가정에서 도와주시면 좋은 부분', c.home_tips);
+  sec('상담 때 함께 이야기 나눌 부분', c.consult_points);
   sec('선생님 코멘트', c.teacher_comment);
   sec('학습 결과물', (facts.works || []).map((w) => `${dateShort(w.date)} ${w.type}: ${w.comment}`));
   return L.join('\n\n');
@@ -777,7 +840,7 @@ export function testChart(series, weeks) {
     const mid = (x(lastPrev) + x(firstCur)) / 2;
     shade = `<rect x="${L}" y="${T}" width="${mid - L}" height="${H - T - B}" fill="#f3f2f8"/>
       <text x="${(L + mid) / 2}" y="${T - 8}" text-anchor="middle" class="ax">이전 기록</text>
-      <text x="${(mid + W - R) / 2}" y="${T - 8}" text-anchor="middle" class="ax">${weeks === 2 ? '이번 2주' : '이번 주'}</text>`;
+      <text x="${(mid + W - R) / 2}" y="${T - 8}" text-anchor="middle" class="ax">${labelsOf(weeks).cur}</text>`;
   }
   const grid = [lo, Math.round((lo + 100) / 2), 100].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#e6e4ee" stroke-width="1"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" class="ax">${v}</text>`).join('');
   const step = Math.ceil(dates.length / 5);
@@ -810,7 +873,7 @@ export function testChart(series, weeks) {
 export function homeworkChart(hw, weeks) {
   if (!hw || hw.rate == null) return '';
   const row = (label, v, faded) => `<div class="bar"><span class="bl">${label}</span><span class="bt"><span class="bf" style="width:${Math.max(2, v)}%;background:${SERIES[0]};opacity:${faded ? 0.4 : 1}"></span></span><span class="bv">${v}%</span></div>`;
-  return `<div class="chart"><div class="ct">숙제 완료율</div>${hw.prev_rate != null ? row(weeks === 2 ? '지난 2주' : '지난주', hw.prev_rate, true) : ''}${row(weeks === 2 ? '이번 2주' : '이번 주', hw.rate, false)}</div>`;
+  return `<div class="chart"><div class="ct">숙제 완료율</div>${hw.prev_rate != null ? row(labelsOf(weeks).prev, hw.prev_rate, true) : ''}${row(labelsOf(weeks).cur, hw.rate, false)}</div>`;
 }
 
 const LEVEL_COLOR = { 도입: '#ffe3cc', 발전: '#fff1b8', 안정: '#d8f0c8', 심화: '#d8e8ff' };
@@ -832,7 +895,7 @@ function goalsHtml(list) {
 }
 export function reportHtml(settings, r, facts, c, opts = {}) {
   const g = growthSettings(settings);
-  const W = facts.period?.weeks || 1;
+  const W = facts.period || 1;
   const ul = (arr) => (arr && arr.length ? `<ul>${arr.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '');
   const p = (t) => (t ? `<p>${esc(t).replace(/\n/g, '<br>')}</p>` : '');
   let n = 0;
@@ -855,8 +918,8 @@ export function reportHtml(settings, r, facts, c, opts = {}) {
   const badge = r.source === 'rule' ? '<div class="note">이번 리포트는 AI 없이 수업 기록만으로 정리했어요.</div>' : '';
   const body = [
     sec('학생 이름 및 학습 기간', head),
-    sec(`이번 ${W === 2 ? '2주' : '주'} 학습 진도`, prog + p(c.concepts)),
-    sec(`이번 ${W === 2 ? '2주' : '주'} 시험 결과`, tests ? testChart(facts.test_series, W) + tests : ''),
+    sec(`${labelsOf(W).cur} 학습 진도`, prog + p(c.concepts)),
+    sec(`${labelsOf(W).cur} 시험 결과`, tests ? testChart(facts.test_series, W) + tests : ''),
     sec('학습 성취도', ach),
     sec('영역별 학습 진단', skillsHtml(c.skills), 'skills-sec'),
     sec('우리 아이가 잘하고 있는 부분', ul(c.strengths), 'mint'),
@@ -864,14 +927,15 @@ export function reportHtml(settings, r, facts, c, opts = {}) {
     sec('조금 더 연습이 필요한 부분', ul(c.practice), 'lemon'),
     sec('이해가 부족하거나 어려워하는 학습 개념', ul(c.weak_concepts), 'peach'),
     sec('학원에서 추가로 지도할 부분', academy, 'lilac'),
-    sec(`다음 ${W === 2 ? '2주' : '주'} 학습 목표`, goalsHtml(c.goals), 'sky'),
-    sec(`다음 ${W === 2 ? '2주' : '주'} 학습 예정 내용`, p(c.next_week) || p(facts.next_plan ? `다음에는 ${facts.next_plan}을(를) 학습할 예정이에요.` : '')),
+    sec(`${labelsOf(W).next} 학습 목표`, goalsHtml(c.goals), 'sky'),
+    sec(`${labelsOf(W).next} 학습 예정 내용`, p(c.next_week) || p(facts.next_plan ? `다음에는 ${facts.next_plan}을(를) 학습할 예정이에요.` : '')),
     sec('가정에서 함께 도와주시면 좋은 부분', ul(c.home_tips)),
+    sec('상담 때 함께 이야기 나눌 부분', ul(c.consult_points), 'lilac'),
     sec('선생님의 특별 코멘트', p(c.teacher_comment), 'note-sec'),
     sec('학습 결과물 및 활동 사진', works + photos),
   ].join('');
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
-<title>${esc(facts.student)} 주간 성장 리포트</title>
+<title>${esc(facts.student)} ${labelsOf(W).name}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
 <style>
 *{box-sizing:border-box}body{margin:0;background:#f6f4fb;color:#2b2a33;font-family:Pretendard,-apple-system,system-ui,sans-serif;-webkit-font-smoothing:antialiased;line-height:1.6}
@@ -906,7 +970,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 @media print{body{background:#fff}.tools{display:none}main{padding:0}.sec{border-color:#e6e3ee}}
 </style></head><body><main>
 ${opts.noTools ? '' : '<div class="tools"><button onclick="window.print()">PDF 저장 · 인쇄</button></div>'}
-<div class="cover"><div class="brand">${esc(g.brand || 'PAMUS ENGLISH')}</div><div class="ttl">${W === 2 ? 'BI-WEEKLY GROWTH REPORT' : 'WEEKLY GROWTH REPORT'}</div><div class="subt">우리 아이의 ${W === 2 ? '2주' : '일주일'} 성장 이야기</div><div class="campus">${esc(settings.academy || '')}</div></div>
+<div class="cover"><div class="brand">${esc(g.brand || 'PAMUS ENGLISH')}</div><div class="ttl">${labelsOf(W).title}</div><div class="subt">우리 아이의 ${labelsOf(W).subt} 성장 이야기</div><div class="campus">${esc(settings.academy || '')}</div></div>
 ${badge}${body}
 <div class="foot">${esc(settings.academy || '')}${settings.academy_phone ? ` · 문의 ${esc(settings.academy_phone)}` : ''}</div>
 </main></body></html>`;
