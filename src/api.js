@@ -11,7 +11,7 @@ import { renderTemplate, checkKakaoFields, kakaoVariables, kakaoFieldText } from
 import { RECOMMENDED_KAKAO, DEFAULT_SMS, KIND_LABELS, CUSHION_LABELS, BASIC_ONLY_KINDS } from './defaults.js';
 import { worksList, workRow, workUpload, workUpdate, workDelete, workImage, workAnalyze, worksForReport, WORK_TYPES } from './works.js';
 import { mediaStart, mediaPart, mediaComplete, mediaDelete, mediaList, r2Ready } from './media.js';
-import { evalDay, saveEvalMarks, saveDayNote, saveEvalDayItems, processQueue, contentOf, cleanContent, ruleWrite, reportHtml, reportText, growthSettings, periodFor, polishComment, polishField, polishAll, NOTE_FIELDS, EVAL_MARKS, oneWeek, REPORT_KIND, MSG_KIND } from './growth.js';
+import { evalDay, saveEvalMarks, saveDayNote, saveEvalDayItems, processQueue, contentOf, cleanContent, ruleWrite, reportHtml, reportText, growthSettings, periodFor, polishComment, polishField, polishAll, NOTE_FIELDS, EVAL_MARKS, oneWeek, REPORT_KIND, MSG_KIND, periodOfKind, ensureReports } from './growth.js';
 
 const SESSION_DAYS = 60;
 
@@ -324,8 +324,7 @@ async function homework(env, me, url) {
 async function listMessages(env, me, url) {
   const kind = url.searchParams.get('kind') || 'daily';
   let ref = url.searchParams.get('ref') || kstNow().date;
-  if (kind === 'growth') ref = periodFor(await getSettings(env), ref).ref;
-  if (kind === 'growth1') ref = periodFor(oneWeek(await getSettings(env)), ref).ref;
+  if (REPORT_KIND[kind]) ref = periodOfKind(await getSettings(env), REPORT_KIND[kind], ref).ref;
   const exists = await first(env, 'SELECT id FROM messages WHERE kind = ? AND ref = ? LIMIT 1', kind, ref);
   if (exists) await generate(env, kind, ref); // 열 때마다 가장 최근 수업 기록으로 다시 맞추기
   const vis = await visibleStudentIds(env, me);
@@ -354,7 +353,7 @@ async function listMessages(env, me, url) {
       kakaoPreview: item.kakao ? renderTemplate((settings.kakao.templates || []).find((t) => t.templateId === item.kakao.templateId)?.text || '', vars, 'kakao') : '',
     };
   });
-  if (kind === 'growth' || kind === 'growth1') {
+  if (REPORT_KIND[kind]) {
     const reps = await all(env, 'SELECT id, student_id, status, source, error, edited, viewed_at FROM reports WHERE kind = ? AND ref = ?', REPORT_KIND[kind], ref);
     const rMap = new Map(reps.map((r) => [r.student_id, r]));
     for (const m of list) { const r = rMap.get(m.student_id); if (r) Object.assign(m, { report_id: r.id, report_status: r.status, report_source: r.source, report_error: r.error, report_edited: !!r.edited, report_viewed: r.viewed_at }); }
@@ -400,7 +399,7 @@ async function reportGet(env, me, url) {
   const works = facts.period ? await worksForReport(env, r.student_id, facts.period.from, facts.period.to) : [];
   const base = String(settings.base_url || '').replace(/\/+$/, '');
   return {
-    id: r.id, student: r.student_name, ref: r.ref, status: r.status, source: r.source, model: r.model, error: r.error, edited: !!r.edited,
+    id: r.id, student: r.student_name, student_id: r.student_id, kind: r.kind, ref: r.ref, status: r.status, source: r.source, model: r.model, error: r.error, edited: !!r.edited,
     viewed_at: r.viewed_at, link: base ? `${base}/r/${r.token}` : `/r/${r.token}`, content: c,
     text: reportText(settings, facts, c), html: reportHtml(settings, r, facts, c, { noTools: true, works, workSrc: (w) => `/api/works/${w.id}/img` }),
   };
@@ -415,13 +414,13 @@ async function reportRegenerate(env, me, body) {
   const r = await reportRow(env, me, body.id);
   await run(env, "UPDATE reports SET edited = NULL, status = 'queued', tries = 0 WHERE id = ?", r.id);
   await processQueue(env, { id: r.id });
-  await generate(env, MSG_KIND[r.kind] || 'growth', r.ref);
+  if (MSG_KIND[r.kind]) await generate(env, MSG_KIND[r.kind], r.ref);
   return { ok: true };
 }
 async function reportProcess(env, body) {
-  const kind = body.kind === 'growth1' ? 'growth1' : 'growth';
+  const kind = ['growth1', 'growth_m', 'growth_q'].includes(body.kind) ? body.kind : 'growth';
   const settings = await getSettings(env);
-  const ref = periodFor(kind === 'growth1' ? oneWeek(settings) : settings, String(body.ref || kstNow().date)).ref;
+  const ref = periodOfKind(settings, REPORT_KIND[kind], String(body.ref || kstNow().date)).ref;
   await generate(env, kind, ref);
   const done = await processQueue(env, { limit: 2 });
   for (const d of done) await generate(env, d.kind, d.ref);
@@ -871,6 +870,26 @@ export async function handleApi(request, env, ctx, url, version) {
       const field = String(body.field || 'teacher_comment');
       const out = await polishField(env, await getSettings(env), JSON.parse(r.facts || '{}'), field, text);
       return Array.isArray(out) ? { list: out, text: out.join('\n') } : { text: out };
+    },
+    // 상담용 리포트: 학생 한 명, 최근 3개월
+    'POST /api/report/consult': async () => {
+      const s = await assertStudent(env, me, body.student_id);
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(String(body.date)) ? body.date : kstNow().date;
+      const settings = await getSettings(env);
+      const w = await ensureReports(env, settings, date, 'consult', { studentId: s.id });
+      const r = await first(env, "SELECT id, status FROM reports WHERE kind = 'consult' AND ref = ? AND student_id = ?", w.ref, s.id);
+      if (!r) throw bad('최근 3개월 동안 이 학생의 수업 기록이 없어서 만들 수 없어요');
+      if (r.status !== 'ready' || body.rewrite) {
+        await run(env, "UPDATE reports SET edited = NULL, status = 'queued', tries = 0 WHERE id = ?", r.id);
+        await processQueue(env, { id: r.id, settings });
+      }
+      return { id: r.id };
+    },
+    'GET /api/report/consults': async () => {
+      const vis = await visibleStudentIds(env, me);
+      const rows = await all(env, `SELECT r.id, r.ref, r.status, r.student_id, s.name AS student, c.name AS class_name FROM reports r
+        JOIN students s ON s.id = r.student_id LEFT JOIN classes c ON c.id = s.class_id WHERE r.kind = 'consult' ORDER BY r.ref DESC, s.name LIMIT 300`);
+      return { list: rows.filter((r) => !vis || vis.has(r.student_id)) };
     },
     'POST /api/report/polish-all': async () => {
       const r = await reportRow(env, me, body.id);

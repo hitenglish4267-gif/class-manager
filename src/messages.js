@@ -6,7 +6,8 @@ import { buildDay } from './context.js';
 import { oneLine } from './progress.js';
 import { renderTemplate, kakaoVariables, kakaoFieldText } from './render.js';
 import { sendBatch, kakaoOnly } from './solapi.js';
-import { ensureReports, growthVars, periodFor, oneWeek, REPORT_KIND } from './growth.js';
+import { ensureReports, growthVars, periodFor, oneWeek, REPORT_KIND, periodOfKind } from './growth.js';
+export const GROWTH_KINDS = ['growth', 'growth1', 'growth_m', 'growth_q'];
 
 export const ATT_LABEL = { present: '출석', late: '지각', absent: '결석' };
 export const HW_LABEL = { done: '완료', partial: '미흡', missing: '미제출' };
@@ -260,7 +261,7 @@ async function hw5Items(env, settings, ref) {
 /** 미리보기 만들기(또는 최신 기록으로 다시 맞추기) */
 export async function generate(env, kind, ref, opts = {}) {
   const settings = opts.settings || await getSettings(env);
-  const tpl = settings.sms_templates[kind === 'growth1' ? 'growth' : kind] || '';
+  const tpl = settings.sms_templates[GROWTH_KINDS.includes(kind) ? 'growth' : kind] || '';
   const items = []; // { student, vars, checked, locked, note }
 
   if (kind === 'daily' || kind === 'missing') {
@@ -279,10 +280,10 @@ export async function generate(env, kind, ref, opts = {}) {
     }
   } else if (kind === 'hw5') {
     items.push(...await hw5Items(env, settings, ref));
-  } else if (kind === 'growth' || kind === 'growth1') {
-    // 성장 리포트 (2주 / 1주): 리포트(AI 문장)가 준비된 학생만 보낼 수 있고, 처음엔 모두 "승인 전"(체크 해제)
+  } else if (GROWTH_KINDS.includes(kind)) {
+    // 성장 리포트 (2주 / 1주 / 월간 / 분기): 리포트(AI 문장)가 준비된 학생만 보낼 수 있고, 처음엔 모두 "승인 전"(체크 해제)
     const gs = kind === 'growth1' ? oneWeek(settings) : settings;
-    ref = periodFor(gs, ref).ref;
+    ref = periodOfKind(settings, REPORT_KIND[kind], ref).ref;
     await ensureReports(env, gs, ref, REPORT_KIND[kind]);
     const url = baseUrl(settings, env);
     const reps = await all(env, `SELECT r.*, s.name, s.phone, s.class_id, s.code, s.msg_style FROM reports r JOIN students s ON s.id = r.student_id
@@ -355,7 +356,7 @@ function chooseKakao(settings, kind, style) {
 
 /** 성장 리포트 버튼 주소의 #{리포트코드}는 "버튼 링크 주소" 칸을 비워 둬도 항상 넘기기 */
 function withButtonVars(kind, variables, vars) {
-  if ((kind === 'growth' || kind === 'growth1') && vars && vars.리포트코드 && !variables['#{리포트코드}']) return { ...variables, '#{리포트코드}': vars.리포트코드 };
+  if (GROWTH_KINDS.includes(kind) && vars && vars.리포트코드 && !variables['#{리포트코드}']) return { ...variables, '#{리포트코드}': vars.리포트코드 };
   if (kind === 'daily_photo' && vars && vars.사진코드 && !variables['#{사진코드}']) return { ...variables, '#{사진코드}': vars.사진코드 };
   return variables;
 }
@@ -363,7 +364,7 @@ function withButtonVars(kind, variables, vars) {
 export function buildSendItem(settings, kind, key, to, text, vars, studentStyle) {
   // 사진·영상이 있는 날 일간 리포트는 "사진·영상 보기" 버튼이 있는 템플릿으로 (그 템플릿을 넣어 둔 경우)
   if (kind === 'daily' && vars && vars.사진링크 && chooseKakao(settings, 'daily_photo', 'basic')) kind = 'daily_photo';
-  if (kind === 'growth1') kind = 'growth'; // 1주 성장 리포트도 같은 알림톡 템플릿 ("#{학습기간} 동안")
+  if (GROWTH_KINDS.includes(kind)) kind = 'growth'; // 1주·월간·분기 성장 리포트도 같은 알림톡 템플릿 ("#{학습기간} 동안")
   const style = kind === 'daily_photo' ? 'basic' : studentStyle || settings.kakao.style || 'basic';
   const tpl = chooseKakao(settings, kind, style);
   return {
