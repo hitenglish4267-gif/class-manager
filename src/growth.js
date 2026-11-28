@@ -504,6 +504,85 @@ export async function polishComment(env, settings, facts, text) {
   throw lastErr || new Error('AI 호출 실패');
 }
 
+// ───────── 원장님이 직접 적은 짧은 멘트를 자연스럽고 전문적으로 (칸 하나 / 리포트 전체) ─────────
+const FIELD_GUIDE = {
+  overview: '학습 성취도 총평: 5~6문장 한 단락',
+  skills: '영역별 학습 진단: 한 줄에 "영역|단계|진단" (단계는 도입·발전·안정·심화 중 하나, 진단 2~3문장)',
+  concepts: '이번 기간 주요 학습 개념: 2~3문장',
+  strengths: '잘하고 있는 부분: 항목마다 2~3문장 (관찰→의미→다음 지도)',
+  growth: '지난 기간보다 성장한 부분: 항목마다 2~3문장',
+  practice: '조금 더 연습이 필요한 부분: 항목마다 2~3문장, 학원의 지도 방법·빈도 포함',
+  weak_concepts: '어려워하는 학습 개념: 항목마다 2~3문장, 지도 계획 포함',
+  academy_done: '학원에서 이미 지도한 내용: 항목마다 1~2문장',
+  academy_plan: '앞으로 학원에서 지도할 계획: 항목마다 1~2문장 (무엇을·얼마나 자주·어떻게)',
+  goals: '다음 기간 학습 목표: 항목마다 한 줄, 숫자·횟수로 확인할 수 있게',
+  next_week: '다음 기간 학습 예정: 2문장',
+  home_tips: '가정에서 도와주시면 좋은 부분: 항목마다 하루 5~10분 안에 할 수 있는 구체적인 행동',
+  teacher_comment: '선생님의 특별 코멘트: 3~4문장',
+};
+const MEMO_SYSTEM = `당신은 15년 넘게 아이들을 가르쳐 온 영어학원 원장입니다. 원장님이 성장 리포트의 칸에 짧게 적은 메모를, 학부모님께 드리는 자연스럽고 전문적인 문장으로 고쳐 씁니다.
+- 메모의 뜻·사실·판단은 그대로 살립니다. 메모가 말한 것을 빼거나 반대로 바꾸지 않습니다.
+- 기록 요약에 있는 근거(날짜·항목·점수·횟수·변화)가 메모와 맞으면 함께 넣어 구체적으로 만듭니다. 기록에도 메모에도 없는 사실은 지어내지 않습니다.
+- 따뜻하고 차분한 존댓말("~했어요", "~하고 있어요", "~할 예정이에요"). 상투어("열심히 했어요"·"잘했어요" 단독, "지켜봐 주세요"), 느낌표, 이모지 금지.
+- 학원 용어는 처음 나올 때 괄호로 쉽게 풀어 줍니다.`;
+
+function aiText(r) { return typeof r === 'string' ? r : r?.response ?? r?.choices?.[0]?.message?.content ?? r?.result?.response; }
+
+/** 칸 하나 다듬기 → 문자열 또는 줄 목록 */
+export async function polishField(env, settings, facts, field, text) {
+  if (!env.AI) throw new Error('Workers AI가 연결되지 않았어요');
+  if (field === 'teacher_comment') return polishComment(env, settings, facts, text);
+  const g = growthSettings(settings);
+  const models = [g.model, ...FALLBACK_MODELS.filter((m) => m !== g.model)];
+  const isList = LIST_KEYS.has(field);
+  const ask = `${facts ? `기록 요약:\n${briefFor(facts)}\n\n` : ''}고칠 칸: ${FIELD_GUIDE[field] || field}\n원장님 메모:\n${String(text).slice(0, 2000)}\n\n`
+    + (isList ? '메모의 각 줄(항목)을 다듬어 JSON 문자열 배열 하나만 출력하세요. 예: ["…","…"]' : '다듬은 문장만 출력하세요. 따옴표나 설명을 붙이지 마세요.');
+  let lastErr = null;
+  for (const model of models) {
+    try {
+      const r = await env.AI.run(model, { messages: [{ role: 'system', content: MEMO_SYSTEM }, { role: 'user', content: ask }], max_tokens: 1500, temperature: 0.4 });
+      let out = String(aiText(r) || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      if (isList) {
+        const a = out.indexOf('['), b = out.lastIndexOf(']');
+        let arr = a >= 0 && b > a ? JSON.parse(out.slice(a, b + 1)) : out.split('\n');
+        arr = cleanContent({ [field]: arr })[field];
+        if (!arr.length) throw new Error('AI 답이 비어 있어요');
+        return arr;
+      }
+      out = out.replace(/^["“']|["”']$/g, '').replace(/!+/g, '.').trim();
+      if (out.length < 5) throw new Error('AI 답이 비어 있어요');
+      return out.slice(0, 1500);
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('AI 호출 실패');
+}
+
+/** 원장님이 고친 리포트 전체를 한 번에 다듬기 (적은 뜻은 살리고, 빈 칸은 비워 둔 채로) */
+export async function polishAll(env, settings, facts, content) {
+  if (!env.AI) throw new Error('Workers AI가 연결되지 않았어요');
+  const g = growthSettings(settings);
+  const models = [g.model, ...FALLBACK_MODELS.filter((m) => m !== g.model)];
+  const src = cleanContent(content || {});
+  const guide = Object.entries(FIELD_GUIDE).map(([k, v]) => `- ${k}: ${v}`).join('\n');
+  const ask = `${facts ? `기록 요약:\n${briefFor(facts)}\n\n` : ''}칸별 형식:\n${guide}\n\n원장님이 적은 리포트(JSON):\n${JSON.stringify(src)}\n\n`
+    + '각 칸의 원장님 메모를 다듬어 같은 키의 JSON 하나만 출력하세요. 원장님이 비워 둔 칸("" 또는 [])은 비워 둡니다. 여러 칸에 같은 문장을 되풀이하지 않습니다.';
+  let lastErr = null;
+  for (const model of models) {
+    try {
+      const r = await env.AI.run(model, { messages: [{ role: 'system', content: MEMO_SYSTEM }, { role: 'user', content: ask }], max_tokens: 3000, temperature: 0.4 });
+      const out = cleanContent(parseJson(aiText(r)));
+      // 원장님이 비워 둔 칸은 비워 두고, AI가 빠뜨린 칸은 원래 메모 그대로
+      for (const k of SECTION_KEYS) {
+        const empty = (v) => (Array.isArray(v) ? !v.length : !String(v || '').trim());
+        if (empty(src[k])) out[k] = src[k];
+        else if (empty(out[k])) out[k] = src[k];
+      }
+      return refineContent(out, facts);
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('AI 호출 실패');
+}
+
 /** AI를 못 쓸 때: 기록만으로 정리 (지어내지 않고, 기록을 날짜·평가와 함께 문장으로 옮기기만) */
 export function ruleWrite(f) {
   const w = f.period?.weeks || 1;

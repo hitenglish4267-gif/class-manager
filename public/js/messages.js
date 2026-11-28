@@ -257,20 +257,35 @@ export async function renderMessages(main) {
       const c = { ...R.content };
       const tas = FIELDS.map(([k, label]) => {
         const ta = h('textarea', { class: 'input', rows: k === 'teacher_comment' ? 4 : 2, value: LIST.has(k) ? (c[k] || []).join('\n') : (c[k] || ''), oninput: () => { c[k] = LIST.has(k) ? ta.value.split('\n').map((x) => x.trim()).filter(Boolean) : ta.value; } });
-        // 선생님 코멘트: 짧게 적고 "AI로 다듬기"를 누르면 친절하고 전문적인 문장으로
-        const polish = k === 'teacher_comment' ? h('button', { class: 'btn small mt-s', type: 'button', onclick: async (e) => {
-          if (!ta.value.trim()) { toast('코멘트를 짧게라도 먼저 적어 주세요', true); return; }
+        // 어느 칸이든 짧게 적고 "AI로 다듬기"를 누르면 그 뜻을 살려 자연스럽고 전문적인 문장으로
+        const polish = h('button', { class: 'btn small mt-s', type: 'button', onclick: async (e) => {
+          if (!ta.value.trim()) { toast('짧게라도 먼저 적어 주세요', true); return; }
           e.target.disabled = true; e.target.textContent = 'AI가 다듬는 중…';
-          try { const r = await api('/api/report/polish', { id: R.id, text: ta.value }); ta.value = r.text; c[k] = r.text; toast('다듬었어요. 확인하고 "고친 내용 저장"을 눌러 주세요'); }
+          try { const r = await api('/api/report/polish', { id: R.id, field: k, text: ta.value }); ta.value = r.text; c[k] = r.list || r.text; grow(ta); toast('다듬었어요. 확인하고 "고친 내용 저장"을 눌러 주세요'); }
           catch (err) { toast(err.message, true); }
           e.target.disabled = false; e.target.textContent = 'AI로 다듬기';
-        } }, 'AI로 다듬기') : null;
+        } }, 'AI로 다듬기');
+        ta._key = k;
         return h('label', { class: 'field mt-s' }, h('span', { class: 'lbl' }, label,
-          LIST.has(k) ? h('span', { class: 'tiny muted', style: { fontWeight: 500 } }, ' — 한 줄에 하나씩') : null,
-          k === 'teacher_comment' ? h('span', { class: 'tiny muted', style: { fontWeight: 500 } }, ' — 짧게 적고 "AI로 다듬기"를 누르면 친절하고 전문적으로 바꿔 줘요') : null), ta, polish);
+          LIST.has(k) ? h('span', { class: 'tiny muted', style: { fontWeight: 500 } }, ' — 한 줄에 하나씩') : null), ta, polish);
       });
-      const edit = h('div', { class: 'rep-edit hidden' }, ...tas,
+      const polishAllBtn = h('button', { class: 'btn', type: 'button', onclick: async (e) => {
+        e.target.disabled = true; e.target.textContent = 'AI가 전체를 다듬는 중… (30초쯤)';
+        try {
+          const r = await api('/api/report/polish-all', { id: R.id, content: c });
+          for (const ta of tas.map((l) => l.querySelector('textarea'))) {
+            const k = ta._key; c[k] = r.content[k];
+            ta.value = LIST.has(k) ? (r.content[k] || []).join('\n') : (r.content[k] || ''); grow(ta);
+          }
+          toast('적어 두신 뜻을 살려 전체를 다듬었어요. 확인하고 "고친 내용 저장"을 눌러 주세요');
+        } catch (err) { toast(err.message, true); }
+        e.target.disabled = false; e.target.textContent = '적은 내용 전체 AI로 다듬기';
+      } }, '적은 내용 전체 AI로 다듬기');
+      const edit = h('div', { class: 'rep-edit hidden' },
+        h('div', { class: 'note small' }, '칸마다 짧게 메모처럼 적어도 돼요. 칸 아래 "AI로 다듬기"는 그 칸만, 맨 아래 "적은 내용 전체 AI로 다듬기"는 모든 칸을 한 번에 자연스럽고 전문적인 문장으로 바꿔요. 적은 뜻은 그대로 살리고, 기록에 없는 내용은 지어내지 않아요.'),
+        ...tas,
         h('div', { class: 'row mt' },
+          polishAllBtn,
           h('button', { class: 'btn primary', onclick: async () => { try { await api('/api/report/edit', { id: R.id, content: c }); toast('고친 내용을 저장했어요'); close(); openReport(m); load(); } catch (e) { toast(e.message, true); } } }, '고친 내용 저장'),
           R.edited ? h('button', { class: 'btn ghost', onclick: async () => { await api('/api/report/edit', { id: R.id, reset: true }); toast('AI가 쓴 문장으로 되돌렸어요'); close(); openReport(m); } }, 'AI 문장으로 되돌리기') : null));
       return h('div', null,
